@@ -2,7 +2,7 @@
 
 import hashlib
 import math
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class HashEmbeddingModel:
