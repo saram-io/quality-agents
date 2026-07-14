@@ -107,3 +107,80 @@ docker logs -f gxp_validation_backend
 docker compose down
 ```
 
+
+---
+
+## 6. Comprehensive Testing and Verification Guide
+
+This section describes how to test and verify every agent, connector, event handler, and recovery feature in the platform.
+
+### A. Testing the Automated Policy Drift & Regulatory Scanning Agent
+1. **Mock Assessment Execution**:
+   - The Policy Drift Agent (`policy_drift_agent`) parses new regulatory text, performs semantic matching against stored SOPs using the `search_internal_sops_for_similarity` tool, and returns structural gap analysis data.
+   - Run the dedicated unit test suite:
+     ```bash
+     uv run pytest -k test_policy_drift_regulatory_scanning
+     ```
+2. **Database Verification**:
+   - Verify that when a policy drift is identified, a draft Change Control request and a Dashboard Notification are created:
+     ```bash
+     uv run python3 -c "import sqlite3; conn = sqlite3.connect('gxp_enterprise.db'); cursor = conn.cursor(); print('Change Controls:', cursor.execute('SELECT * FROM change_control_requests').fetchall()); print('Notifications:', cursor.execute('SELECT * FROM dashboard_notifications').fetchall())"
+     ```
+
+### B. Testing the Veeva Vault GxP Connector
+1. **Connector & Metadata Bindings Test**:
+   - Tests mock metadata mappings (GAMP classification and Part 11 signatures) and connection timeout fallback routes.
+   - Run the connector unit test suite:
+     ```bash
+     uv run pytest -k test_veeva_integration_connector
+     ```
+2. **Verify Electronic Signature Upload**:
+   - Triggering the sign-off review API endpoint (`POST /api/v1/validation/{doc_id}/review`) immediately pushes validation documents to Veeva Vault and records the returned `DOC-` ID locally.
+
+### C. Testing GAMP 5 Shadow Deployments & Parallel Execution
+1. **Triggering Parallel Executions**:
+   - When a validation generation request is processed, the system triggers the shadow pipeline in the background using ContextVar-isolated settings if `SHADOW_ENABLED` is active.
+   - Run the shadow parallel executor unit test:
+     ```bash
+     uv run pytest -k test_shadow_deployment_engine
+     ```
+2. **Dashboard Telemetry Aggregates**:
+   - Request shadow results from the administrative dashboard:
+     ```bash
+     curl -H "X-User-ID: qa@tenant.a.com" -H "X-Tenant-ID: tenant-A" -H "X-User-Role: QUALITY_APPROVER" http://localhost:8000/api/v1/admin/shadow/results
+     ```
+
+### D. Testing the GxP System Recovery & Rollback Controller
+1. **Emergency State Restoration**:
+   - Reverts active system prompts and model parameters back to matching qualified snapshot metadata.
+   - Trigger a snapshot rollback:
+     ```bash
+     curl -X POST -d '{"snapshot_id":"default-qualified-snapshot-uuid","justification":"Manual rollback test."}' -H "Content-Type: application/json" -H "X-User-ID: qa@tenant-a.com" -H "X-Tenant-ID: tenant-A" -H "X-User-Role: QUALITY_APPROVER" http://localhost:8000/api/v1/admin/recovery/rollback
+     ```
+2. **Automated Hot-Fix Qualification**:
+   - Deploys prompt hot-fixes, executes pytest runs, and triggers automated self-reversions upon failure:
+     ```bash
+     uv run pytest -k test_recovery_rollback_and_hotfix
+     ```
+
+### E. Testing Event Broker & Pub/Sub Coordination
+1. **Cascading Agent Runs**:
+   - URS edits publish `URS_MODIFIED` events that enqeue automatic functional spec revision jobs. Guardrail trips publish `GUARDRAIL_TRIPPED` events blocking subsequent electronic sign-offs.
+   - Run the Pub/Sub test:
+     ```bash
+     uv run pytest -k test_event_broker_coordination
+     ```
+
+### F. Running the Global Test Suite & CI Verification
+Execute the entire test package and validation runners:
+```bash
+# Run all unit tests
+uv run pytest
+
+# Compile GxP System Qualification reports (SYSTEM_QUALIFICATION_REPORT.md)
+uv run python3 -m app.qualification.runner
+
+# Run CI Validation Verification Gates (VALIDATION_RUN_REPORT.md)
+uv run python3 run_validation_ci.py
+```
+
