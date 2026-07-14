@@ -567,6 +567,150 @@ async def test_vision_verification_framework(mock_deps):
             os.remove(tmp_path)
 
 
+@pytest.mark.asyncio
+async def test_api_and_worker_queue(mock_deps):
+    """Verify enqueuing, background GxP execution, tenant isolation, RBAC, and envelope encryption."""
+    from fastapi.testclient import TestClient
+    from api import app
+    from app.queue.tasks import get_job_state, get_validation_document, JobStatus
+    from app.queue.worker import TASK_QUEUE, async_execute_agent_pipeline
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from pydantic_ai.models.test import TestModel
+    import sqlite3
+    import json
+
+    client = TestClient(app)
+
+    # Tenant A credentials
+    headers_a = {
+        "X-User-ID": "engineer@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "CSV_ENGINEER"
+    }
+
+    # 1. Test POST /api/v1/validation/generate
+    payload = {
+        "target_system": "Batch Calibration Scaler",
+        "user_input": "Generate a URS document for scaling operations.",
+        "diagram_path": None
+    }
+    response = client.post("/api/v1/validation/generate", json=payload, headers=headers_a)
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    
+    job_id = data["job_id"]
+
+    # 2. Test GET /api/v1/validation/jobs/{job_id} before execution (should be QUEUED)
+    job_status_response = client.get(f"/api/v1/validation/jobs/{job_id}", headers=headers_a)
+    assert job_status_response.status_code == 200
+    job_state = job_status_response.json()
+    assert job_state["status"] == "QUEUED"
+
+    # 3. Simulate background worker execution
+    await TASK_QUEUE.get()
+    TASK_QUEUE.task_done()
+
+    deps_payload = {
+        "current_user": headers_a["X-User-ID"],
+        "target_system": payload["target_system"],
+        "session": {
+            "user_id": headers_a["X-User-ID"],
+            "tenant_id": headers_a["X-Tenant-ID"],
+            "role": headers_a["X-User-Role"]
+        }
+    }
+    
+    with (
+        regulatory_grounding_agent.override(model=TestModel()),
+        validation_drafting_agent.override(model=TestModel()),
+        internal_review_agent.override(model=TestModel())
+    ):
+        await async_execute_agent_pipeline(job_id, payload["user_input"], deps_payload, None)
+
+    # 4. Verify completed job status and progress
+    job_status_completed = client.get(f"/api/v1/validation/jobs/{job_id}", headers=headers_a)
+    assert job_status_completed.status_code == 200
+    completed_state = job_status_completed.json()
+    assert completed_state["status"] == "COMPLETED"
+    assert completed_state["progress_percentage"] == 100
+    assert completed_state["result_doc_id"] is not None
+
+    doc_id = completed_state["result_doc_id"]
+
+    # 5. Check logical data isolation (cross-tenant security)
+    # A user from Tenant B tries to check Tenant A's job state
+    headers_b = {
+        "X-User-ID": "engineer@tenant-b.com",
+        "X-Tenant-ID": "tenant-B",
+        "X-User-Role": "CSV_ENGINEER"
+    }
+    isolation_job_response = client.get(f"/api/v1/validation/jobs/{job_id}", headers=headers_b)
+    assert isolation_job_response.status_code == 404
+
+    # A user from Tenant B tries to retrieve Tenant A's document
+    isolation_doc_response = client.get(f"/api/v1/validation/documents/{doc_id}", headers=headers_b)
+    assert isolation_doc_response.status_code == 404
+
+    # 6. Verify envelope encryption AT REST
+    # We query the SQLite database directly and assert that the text in `sections` is encrypted (not containing plaintext)
+    from app.queue.tasks import DB_PATH
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sections FROM compiled_documents WHERE doc_id = ?", (doc_id,))
+        row = cursor.fetchone()
+        assert row is not None
+        db_sections = json.loads(row[0])
+        # The test output sections under TestModel default result schema has text "a"
+        # We assert that "a" is NOT stored in plain form, but encrypted
+        for title, value in db_sections.items():
+            assert value != "a"
+            assert len(value) > 10  # Encrypted text will be base64-encoded combined payload
+
+    # 7. Verify dynamic decryption on GET for Tenant A
+    doc_response = client.get(f"/api/v1/validation/documents/{doc_id}", headers=headers_a)
+    assert doc_response.status_code == 200
+    doc_data = doc_response.json()
+    assert doc_data["document_type"] == "a"
+    # Decrypted sections should match the plain mock result text "a"
+    for title, value in doc_data["sections"].items():
+        assert value == "a"
+
+    # 8. Test Role-Based Access Control (RBAC) endpoint protections
+    # CSV_ENGINEER tries to sign off (requires QUALITY_APPROVER)
+    signoff_payload = {"meaning": "Approving batch calibrations"}
+    sign_bad_role = client.post(f"/api/v1/validation/{doc_id}/review", json=signoff_payload, headers=headers_a)
+    assert sign_bad_role.status_code == 403
+
+    # QUALITY_APPROVER successfully signs off
+    headers_approver = {
+        "X-User-ID": "qa@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "QUALITY_APPROVER"
+    }
+    sign_ok = client.post(f"/api/v1/validation/{doc_id}/review", json=signoff_payload, headers=headers_approver)
+    assert sign_ok.status_code == 200
+    sign_receipt = sign_ok.json()
+    assert sign_receipt["signed_by"] == "qa@tenant-a.com"
+    assert sign_receipt["signature_token"] is not None
+
+    # CSV_ENGINEER tries to verify audit trail (requires QUALITY_APPROVER or AUDITOR)
+    audit_bad = client.get("/api/v1/audit/verify", headers=headers_a)
+    assert audit_bad.status_code == 403
+
+    # AUDITOR successfully verifies audit trail
+    headers_auditor = {
+        "X-User-ID": "auditor@fda.gov",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "AUDITOR"
+    }
+    audit_ok = client.get("/api/v1/audit/verify", headers=headers_auditor)
+    assert audit_ok.status_code == 200
+    assert audit_ok.json()["logs_verified"] is True
+
+
+
+
 
 
 

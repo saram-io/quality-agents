@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from .database import SOPDatabase, AuditLogger
 from .vector_store import QualityVectorStoreManager
+from .auth.tenant import UserSession
 
 
 @dataclass
@@ -17,6 +18,9 @@ class QualitySystemDeps:
     audit_logger: AuditLogger
     vector_store: QualityVectorStoreManager
     gamp_category: Optional[int] = None
+    job_id: Optional[str] = None
+    session: Optional[UserSession] = None
+    event_broker: Optional[Any] = None
 
 
 class GroundingAnalysis(BaseModel):

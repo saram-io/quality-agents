@@ -87,11 +87,12 @@ class QualityVectorStoreManager:
         matches.sort(key=lambda x: x["similarity_score"], reverse=True)
         return matches[:limit]
 
-    def seed_regulatory_knowledge_base(self, documents: List[Dict[str, str]]) -> None:
+    def seed_regulatory_knowledge_base(self, documents: List[Dict[str, str]], tenant_id: Optional[str] = None) -> None:
         """Computes embeddings and indexes a batch of document structures.
 
         Args:
             documents: List of dicts containing 'sop_id', 'section_title', and 'content'.
+            tenant_id: Optional tenant identifier to scope documents.
         """
         for doc in documents:
             content = doc.get("content", "")
@@ -100,15 +101,22 @@ class QualityVectorStoreManager:
                 "sop_id": doc.get("sop_id", "UNKNOWN"),
                 "section_title": doc.get("section_title", ""),
                 "content": content,
-                "embedding": embedding
+                "embedding": embedding,
+                "tenant_id": tenant_id
             })
 
-    def query_relevant_guidelines(self, query_text: str, limit: int = 3) -> List[Dict[str, Any]]:
+    def query_relevant_guidelines(
+        self,
+        query_text: str,
+        limit: int = 3,
+        tenant_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Semantic search querying matched SOP guidelines using cosine similarity score.
 
         Args:
             query_text: Search query string.
             limit: Maximum matches to return.
+            tenant_id: Optional tenant identifier to enforce logical separation.
 
         Returns:
             List of matched documents containing metadata and calculated 'similarity_score'.
@@ -117,6 +125,10 @@ class QualityVectorStoreManager:
         matches: List[Dict[str, Any]] = []
 
         for doc in self.index:
+            # Enforce tenant isolation if tenant_id is specified
+            if tenant_id and doc.get("tenant_id") != tenant_id:
+                continue
+
             # Cosine similarity is the dot product of two L2-normalized unit vectors
             similarity = sum(q * d for q, d in zip(query_vector, doc["embedding"]))
             

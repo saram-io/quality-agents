@@ -153,7 +153,11 @@ def fetch_applicable_sop_clauses(
         f"Executing vector query: '{query_text}'."
     )
     
-    matches = ctx.deps.vector_store.query_relevant_guidelines(query_text, limit=limit)
+    tenant_id = None
+    if ctx.deps.session:
+        tenant_id = ctx.deps.session.tenant_id
+        
+    matches = ctx.deps.vector_store.query_relevant_guidelines(query_text, limit=limit, tenant_id=tenant_id)
     
     # Filter by similarity confidence score threshold (>= 0.70)
     valid_matches = [m for m in matches if m["similarity_score"] >= 0.70]

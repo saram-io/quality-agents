@@ -5,9 +5,11 @@ description = "Multi-Agent system for Life Sciences CSV using Pydantic AI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.139.0",
     "pydantic>=2.10.0",
     "pydantic-ai>=2.9.1",
     "pypdf>=6.14.2",
+    "uvicorn>=0.51.0",
 ]
 
 [dependency-groups]

@@ -234,6 +234,9 @@ async def _run_pipeline_core(
         f"GAMP Category: {grounding_analysis.gamp_category}. Applicable SOPs: {grounding_analysis.applicable_sops}"
     )
 
+    from app.queue.tasks import update_job_progress
+    update_job_progress(deps.job_id, 30, "Regulatory Grounding completed. Loading Drafting template...")
+
     # Step 2: Validation Drafting
     drafting_prompt = prompt_registry.get_prompt(
         "validation_drafting",
@@ -263,6 +266,9 @@ async def _run_pipeline_core(
     )
     validation_draft = drafting_run_result.output
     deps.audit_logger.log_step("Pipeline:DraftingComplete", f"Document Draft created: {validation_draft.document_type}")
+
+    from app.queue.tasks import update_job_progress
+    update_job_progress(deps.job_id, 60, "Validation Drafting complete. Initiating multi-modal vision and quality audits...")
 
     # Step 2.5: Compliance Risk Scan
     risk_score = evaluate_output_risk(validation_draft)
@@ -321,6 +327,9 @@ async def _run_pipeline_core(
             f"Remedial Actions: {review_report.remedial_actions_required}. "
             f"Initiating correction loop (Attempt {retries}/{max_retries})."
         )
+
+        from app.queue.tasks import update_job_progress
+        update_job_progress(deps.job_id, 75, f"Remediation required. Running correction loop attempt {retries}...")
 
         # Re-draft with revision instructions
         re_draft_prompt = (
