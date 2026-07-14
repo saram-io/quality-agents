@@ -27,6 +27,7 @@ from .vector_store import QualityVectorStoreManager
 from .reporting.compiler import ValidationDocumentCompiler
 from .feedback.memory import QualityCorrectionLesson, extract_correction_lesson, store_correction_lesson
 from .feedback.injector import retrieve_and_inject_feedback
+from .vision_verifier import architecture_vision_agent, ArchitectureComparison, verify_diagram_against_specs
 
 __all__ = [
     "QualitySystemDeps",
@@ -61,4 +62,7 @@ __all__ = [
     "extract_correction_lesson",
     "store_correction_lesson",
     "retrieve_and_inject_feedback",
+    "architecture_vision_agent",
+    "ArchitectureComparison",
+    "verify_diagram_against_specs",
 ]

@@ -501,6 +501,73 @@ def test_realtime_guardrails(mock_deps):
         validate_draft_results(ctx, bad_gamp5)
 
 
+@pytest.mark.asyncio
+async def test_vision_verification_framework(mock_deps):
+    """Verify that multi-modal vision verification agent runs, audits diagrams, and handles GxP overrides."""
+    from app.vision_verifier import verify_diagram_against_specs, architecture_vision_agent, ArchitectureComparison
+    from app.schemas import ValidationDraft
+    from pydantic_ai.models.test import TestModel
+    import os
+
+    draft = ValidationDraft(
+        document_type="URS",
+        sections={"Infrastructure": "Hosted on PostgreSQL database with standard backups."},
+        verification_checklist=[]
+    )
+
+    # 1. Test missing file safety handling (verdict: REJECTED)
+    res_missing = await verify_diagram_against_specs("nonexistent_diagram.png", draft, mock_deps)
+    assert res_missing.compliance_status == "REJECTED"
+    assert "file not found" in res_missing.structural_discrepancies[0]
+
+    # 2. Test successful mock run of the architecture vision agent
+    # First, let's create a temporary dummy image file
+    tmp_path = "tests/test_dummy_diagram.png"
+    with open(tmp_path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+
+    try:
+        # Override vision agent to return specific mock data
+        mock_output = ArchitectureComparison(
+            visual_nodes_detected=["PostgreSQL DB", "API Gateway"],
+            structural_discrepancies=["Visually shows Redis cache missing in text specifications."],
+            data_flow_gaps=["Unencrypted connection from Gateway to DB."],
+            compliance_status="DISCREPANCIES_FOUND"
+        )
+        with architecture_vision_agent.override(model=TestModel(custom_output_args=mock_output)):
+            res_vision = await verify_diagram_against_specs(tmp_path, draft, mock_deps)
+            assert res_vision.compliance_status == "DISCREPANCIES_FOUND"
+            assert "PostgreSQL DB" in res_vision.visual_nodes_detected
+            assert "Unencrypted connection" in res_vision.data_flow_gaps[0]
+
+        # 3. Test end-to-end pipeline integration with downgrading
+        from app.pipeline import run_quality_pipeline
+        from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+
+        with (
+            regulatory_grounding_agent.override(model=TestModel()),
+            validation_drafting_agent.override(model=TestModel()),
+            internal_review_agent.override(model=TestModel()),
+            architecture_vision_agent.override(model=TestModel(custom_output_args=mock_output))
+        ):
+            pipeline_res = await run_quality_pipeline(
+                user_input="Draft a User Requirement Specification for automated batch release.",
+                deps=mock_deps,
+                max_retries=1,
+                diagram_path=tmp_path
+            )
+            # The vision comparison should be attached
+            assert pipeline_res.vision_comparison is not None
+            # Discrepancies should automatically downgrade approval to REJECTED_WITH_GAPS / False
+            assert pipeline_res.review_report.approved is False
+            assert any("Vision Discrepancy Downgrade" in gap for gap in pipeline_res.review_report.validation_gaps)
+
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+
 
 
 

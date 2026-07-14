@@ -7,6 +7,7 @@ from typing import Any, Optional
 from pydantic_ai import AgentRunResult
 
 from .schemas import QualitySystemDeps, GroundingAnalysis, ValidationDraft, ReviewReport
+from .vision_verifier import ArchitectureComparison
 from .agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
 from .monitoring import evaluate_output_risk
 from .config import QualitySystemConfig
@@ -26,6 +27,7 @@ class PipelineResult:
     grounding_run_result: Optional[AgentRunResult] = None
     drafting_run_result: Optional[AgentRunResult] = None
     review_run_result: Optional[AgentRunResult] = None
+    vision_comparison: Optional[ArchitectureComparison] = None
 
 
 async def run_agent_with_retry_and_fallback(
@@ -133,7 +135,8 @@ async def run_agent_with_retry_and_fallback(
 async def run_quality_pipeline(
     user_input: str,
     deps: QualitySystemDeps,
-    max_retries: int = 1
+    max_retries: int = 1,
+    diagram_path: Optional[str] = None
 ) -> PipelineResult:
     """Executes the sequential multi-agent GxP validation pipeline with real-time guardrails."""
     from .guardrails import QualityGuardrailManager, ComplianceViolationException
@@ -173,7 +176,7 @@ async def run_quality_pipeline(
         )
 
     try:
-        return await _run_pipeline_core(user_input, deps, max_retries)
+        return await _run_pipeline_core(user_input, deps, max_retries, diagram_path)
     except Exception as e:
         deps.audit_logger.log_step(
             "Pipeline:CRITICAL_ALERT",
@@ -208,7 +211,8 @@ async def run_quality_pipeline(
 async def _run_pipeline_core(
     user_input: str,
     deps: QualitySystemDeps,
-    max_retries: int = 1
+    max_retries: int = 1,
+    diagram_path: Optional[str] = None
 ) -> PipelineResult:
     """Core sequential multi-agent execution logic."""
     from .schemas import GroundingAnalysis, ValidationDraft, ReviewReport
@@ -264,8 +268,22 @@ async def _run_pipeline_core(
     risk_score = evaluate_output_risk(validation_draft)
     deps.audit_logger.log_step("Pipeline:RiskScan", f"Compliance risk score evaluated: {risk_score}")
 
+    # Step 2.7: Multi-Modal Vision verification checkpoint (if diagram_path is provided)
+    vision_comparison = None
+    if diagram_path:
+        from .vision_verifier import verify_diagram_against_specs
+        vision_comparison = await verify_diagram_against_specs(diagram_path, validation_draft, deps)
+
     # Step 3: Quality Review Check
     review_prompt = f"Audit the drafted validation document:\n{validation_draft.model_dump_json()}"
+    if vision_comparison:
+        review_prompt += (
+            f"\n\nCRITICAL - Vision Architecture Audit Comparison Results:\n"
+            f"- Visual Nodes Detected: {vision_comparison.visual_nodes_detected}\n"
+            f"- Structural Discrepancies: {vision_comparison.structural_discrepancies}\n"
+            f"- Data Flow Gaps: {vision_comparison.data_flow_gaps}\n"
+            f"- Visual Compliance Status: {vision_comparison.compliance_status}\n"
+        )
     review_run_result = await run_agent_with_retry_and_fallback(
         agent=internal_review_agent,
         user_prompt=review_prompt,
@@ -278,6 +296,18 @@ async def _run_pipeline_core(
         review_report.approved = False
         review_report.validation_gaps.append(f"High risk score ({risk_score}) returned from the monitoring compliance scanner.")
         review_report.remedial_actions_required = (review_report.remedial_actions_required or "") + " Resolve compliance red flags in the document."
+
+    # Downgrade review approval if vision verifier detected discrepancies
+    if vision_comparison and vision_comparison.compliance_status in ("REJECTED", "DISCREPANCIES_FOUND"):
+        review_report.approved = False
+        review_report.validation_gaps.append(
+            f"Vision Discrepancy Downgrade: The multi-modal architecture vision audit flagged status: '{vision_comparison.compliance_status}'."
+        )
+        if vision_comparison.structural_discrepancies:
+            review_report.remedial_actions_required = (
+                (review_report.remedial_actions_required or "") +
+                f" Resolve visual diagram discrepancies in spec: {vision_comparison.structural_discrepancies}."
+            )
 
     deps.audit_logger.log_step("Pipeline:ReviewComplete", f"Approval Status: {review_report.approved}")
 
@@ -311,12 +341,25 @@ async def _run_pipeline_core(
         )
         validation_draft = drafting_run_result.output
         
+        # Re-verify diagram against updated specification
+        if diagram_path:
+            from .vision_verifier import verify_diagram_against_specs
+            vision_comparison = await verify_diagram_against_specs(diagram_path, validation_draft, deps)
+            
         # Re-evaluate Risk
         risk_score = evaluate_output_risk(validation_draft)
         deps.audit_logger.log_step("Pipeline:Re-RiskScan", f"Revision Attempt {retries} Compliance risk score: {risk_score}")
 
         # Re-audit
         review_prompt = f"Audit the revised validation document:\n{validation_draft.model_dump_json()}"
+        if vision_comparison:
+            review_prompt += (
+                f"\n\nCRITICAL - Vision Architecture Audit Comparison Results:\n"
+                f"- Visual Nodes Detected: {vision_comparison.visual_nodes_detected}\n"
+                f"- Structural Discrepancies: {vision_comparison.structural_discrepancies}\n"
+                f"- Data Flow Gaps: {vision_comparison.data_flow_gaps}\n"
+                f"- Visual Compliance Status: {vision_comparison.compliance_status}\n"
+            )
         review_run_result = await run_agent_with_retry_and_fallback(
             agent=internal_review_agent,
             user_prompt=review_prompt,
@@ -324,6 +367,12 @@ async def _run_pipeline_core(
         )
         review_report = review_run_result.output
         
+        if vision_comparison and vision_comparison.compliance_status in ("REJECTED", "DISCREPANCIES_FOUND"):
+            review_report.approved = False
+            review_report.validation_gaps.append(
+                f"Vision Discrepancy Downgrade: The multi-modal architecture vision audit flagged status: '{vision_comparison.compliance_status}'."
+            )
+
         if risk_score >= 0.5:
             review_report.approved = False
             review_report.validation_gaps.append(f"High risk score ({risk_score}) returned from the monitoring compliance scanner on revision.")
@@ -370,5 +419,6 @@ async def _run_pipeline_core(
         review_run_result=review_run_result,
         final_status=final_status,
         retries_run=retries,
-        risk_score=risk_score
+        risk_score=risk_score,
+        vision_comparison=vision_comparison
     )
