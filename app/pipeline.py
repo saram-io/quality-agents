@@ -198,6 +198,41 @@ async def run_quality_pipeline(
     try:
         return await _run_pipeline_core(user_input, deps, max_retries, diagram_path)
     except Exception as e:
+        from app.agents.consensus import ConsensusFailureException
+        import json
+        if isinstance(e, ConsensusFailureException):
+            transcript = json.dumps([t.model_dump() for t in e.resolution.negotiation_history])
+            from app.queue.tasks import mark_job_pending_human
+            mark_job_pending_human(deps.job_id, transcript)
+            deps.audit_logger.log_step(
+                "Pipeline:CRITICAL_ALERT",
+                f"Multi-agent consensus failed. Job {deps.job_id} set to PENDING_HUMAN_INTERVENTION."
+            )
+            grounding_dummy = GroundingAnalysis(
+                applicable_sops=[],
+                regulatory_constraints=[],
+                gamp_category=deps.gamp_category or 0,
+                retrieved_chunks=[],
+                confidence_scores=[]
+            )
+            draft_dummy = ValidationDraft(
+                document_type="PENDING_HUMAN_INTERVENTION",
+                sections={"Escalation": f"Debate Trace: {transcript}"},
+                verification_checklist=[]
+            )
+            review_dummy = ReviewReport(
+                approved=False,
+                validation_gaps=[e.resolution.conflict.reason_for_conflict]
+            )
+            return PipelineResult(
+                grounding_analysis=grounding_dummy,
+                validation_draft=draft_dummy,
+                review_report=review_dummy,
+                final_status="PENDING_HUMAN_INTERVENTION",
+                retries_run=0,
+                risk_score=0.5
+            )
+
         deps.audit_logger.log_step(
             "Pipeline:CRITICAL_ALERT",
             f"Guardrail blocked execution. Reason: {str(e)}. User: {deps.current_user}"
@@ -345,6 +380,60 @@ async def _run_pipeline_core(
             )
 
     deps.audit_logger.log_step("Pipeline:ReviewComplete", f"Approval Status: {review_report.approved}")
+
+    # Check for direct multi-agent conflict in gaps
+    conflict_gap = None
+    if not review_report.approved:
+        for gap in review_report.validation_gaps:
+            if any(kw in gap.lower() for kw in ["objection", "conflict", "violates", "sop-"]):
+                conflict_gap = gap
+                break
+
+    if conflict_gap:
+        from app.agents.consensus import ConflictPoint, resolve_validation_conflict
+        disputed_txt = ""
+        for sec_key in validation_draft.sections.keys():
+            if "user requirement" in sec_key.lower() or "urs" in sec_key.lower() or "draft" in sec_key.lower():
+                disputed_txt = validation_draft.sections[sec_key]
+                break
+        if not disputed_txt:
+            disputed_txt = list(validation_draft.sections.values())[0] if validation_draft.sections else "Default draft text."
+
+        conflict_point = ConflictPoint(
+            source_agent="validation_drafting_agent",
+            target_agent="regulatory_grounding_agent",
+            disputed_section=disputed_txt,
+            reason_for_conflict=conflict_gap
+        )
+
+        resolution = await resolve_validation_conflict(conflict_point, deps)
+
+        if resolution.is_consensus_achieved:
+            applied = False
+            for sec_key in validation_draft.sections.keys():
+                if "user requirement" in sec_key.lower() or "urs" in sec_key.lower() or "draft" in sec_key.lower():
+                    validation_draft.sections[sec_key] = resolution.resolved_text
+                    applied = True
+                    break
+            if not applied and validation_draft.sections:
+                first_key = list(validation_draft.sections.keys())[0]
+                validation_draft.sections[first_key] = resolution.resolved_text
+
+            trace_logs = [
+                f"Turn {t.turn_number} by {t.proposing_agent}: Suggestion: '{t.proposed_reconciliation}' (Justification: {t.concession_justification})"
+                for t in resolution.negotiation_history
+            ]
+            deps.audit_logger.log_step(
+                "Consensus:AuditTrace",
+                f"[INFO] Multi-agent consensus achieved on Conflict {conflict_point.conflict_id}. "
+                f"Resolved after {len(resolution.negotiation_history)} turns.\nHistory:\n" + "\n".join(trace_logs)
+            )
+
+            review_report.approved = True
+            review_report.validation_gaps = [g for g in review_report.validation_gaps if g != conflict_gap]
+        else:
+            from app.agents.consensus import ConsensusFailureException
+            raise ConsensusFailureException(resolution)
 
     # Step 4: Remediation Loop
     retries = 0

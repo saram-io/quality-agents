@@ -1,8 +1,8 @@
 # GxP Validation Verification Run Report
 
 > [!IMPORTANT]
-> **Codebase SHA256 Checksum**: `05b639d71717cf78e082dd75c9faa7502d7dfd3b25ca2d839aa3d8e774115547`
-> **Run Timestamp**: `2026-07-14T23:18:46.239705+00:00`
+> **Codebase SHA256 Checksum**: `6b0026028a8e2d828204558313d2bf9eef062b0234d30358411b188aea37a6cc`
+> **Run Timestamp**: `2026-07-14T23:39:53.792071+00:00`
 > **Overall Status**: `PASSED`
 
 ## Executive Quality Gates Scorecard
@@ -21,7 +21,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'Purpose', 'System Requirements'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `652` tokens
-- **Duration**: `0.311s`
+- **Duration**: `0.363s`
 
 ### Test Case ID: `CSA-TC-002`
 - **Overall Pass**: `FAIL`
@@ -29,7 +29,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'Functional Specifications', 'Risk Assessment'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `670` tokens
-- **Duration**: `0.178s`
+- **Duration**: `0.209s`
 
 ### Test Case ID: `CSA-TC-003`
 - **Overall Pass**: `FAIL`
@@ -37,7 +37,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'System Requirements', 'Detailed Design Specification', 'Code Review Checklist'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `664` tokens
-- **Duration**: `0.181s`
+- **Duration**: `0.199s`
 
 ## System Audit Log Trail
 
@@ -54,13 +54,15 @@
 [GroundingAgent:VectorQueryResults] Retrieved 3 total vector matches. 0 passed confidence threshold >= 0.70.
 [GroundingAgent:SOPFetch] User 'ci_build_agent' requested SOP: 'a' for target system 'Batch Ingestion and Automated Release Portal (BIARP)'.
 [GroundingAgent:VectorQueryStart] Executing vector query: 'a'.
-[Pipeline:GroundingComplete] GAMP Category: 0. Applicable SOPs: ['a']
 [GroundingAgent:VectorQueryResults] Retrieved 3 total vector matches. 0 passed confidence threshold >= 0.70.
-[Pipeline:DraftingPromptLoaded] Loaded prompt template 'validation_drafting' version: 1.4.2
 [Pipeline:GroundingComplete] GAMP Category: 0. Applicable SOPs: ['a']
 [Pipeline:DraftingPromptLoaded] Loaded prompt template 'validation_drafting' version: 1.4.2
 [Pipeline:GroundingComplete] GAMP Category: 0. Applicable SOPs: ['a']
 [Pipeline:DraftingPromptLoaded] Loaded prompt template 'validation_drafting' version: 1.4.2
+[Pipeline:GroundingComplete] GAMP Category: 0. Applicable SOPs: ['a']
+[Pipeline:DraftingPromptLoaded] Loaded prompt template 'validation_drafting' version: 1.4.2
+[Pipeline:DraftingComplete] Document Draft created: a
+[Pipeline:RiskScan] Compliance risk score evaluated: 0.0
 [Pipeline:DraftingComplete] Document Draft created: a
 [Pipeline:RiskScan] Compliance risk score evaluated: 0.0
 [Pipeline:DraftingComplete] Document Draft created: a
@@ -69,21 +71,19 @@
 [Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
 [Pipeline:ReviewComplete] Approval Status: False
 [Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
-[Pipeline:DraftingComplete] Document Draft created: a
-[Pipeline:RiskScan] Compliance risk score evaluated: 0.0
 [Pipeline:ReviewComplete] Approval Status: False
 [Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
-[Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
-[Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-002 finished. Passed: False. Time: 0.18s. Tokens: 670.
-[Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
-[Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-001 finished. Passed: False. Time: 0.31s. Tokens: 652.
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
 [Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
 [Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-003 finished. Passed: False. Time: 0.18s. Tokens: 664.
+[CSA:TestCaseComplete] Test CSA-TC-002 finished. Passed: False. Time: 0.21s. Tokens: 670.
+[Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
+[Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
+[CSA:TestCaseComplete] Test CSA-TC-003 finished. Passed: False. Time: 0.20s. Tokens: 664.
+[Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
+[Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
+[CSA:TestCaseComplete] Test CSA-TC-001 finished. Passed: False. Time: 0.36s. Tokens: 652.
 [CSA:SuiteComplete] CSA Suite run finished. Total: 3. Passed: 0. Failed: 3. Tokens: 1986.
 ```

@@ -13,6 +13,7 @@ class JobStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    PENDING_HUMAN_INTERVENTION = "PENDING_HUMAN_INTERVENTION"
 
 
 class AgentJobState(BaseModel):
@@ -346,5 +347,21 @@ def create_dashboard_notification(
                 message,
                 0  # 0 = Unread
             )
+        )
+        conn.commit()
+
+
+def mark_job_pending_human(job_id: str, debate_transcript: str) -> None:
+    """Transitions a target job to a PENDING_HUMAN_INTERVENTION status with the debate trace.
+
+    Args:
+        job_id: Unique UUID identifier.
+        debate_transcript: JSON-serialized negotiation history/debate trace.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE agent_jobs SET status = ?, error_details = ? WHERE job_id = ?",
+            (JobStatus.PENDING_HUMAN_INTERVENTION.value, debate_transcript, job_id)
         )
         conn.commit()

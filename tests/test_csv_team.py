@@ -1006,6 +1006,144 @@ async def test_policy_drift_regulatory_scanning(mock_deps):
         assert notif_row[3] == 0
 
 
+@pytest.mark.asyncio
+async def test_consensus_negotiation_success(mock_deps):
+    """Verify that multi-agent consensus successfully resolves conflicts and returns resolved URS drafts."""
+    from pydantic_ai.models.test import TestModel
+    
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents.consensus import NegotiationTurn
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.agents.consensus import consensus_drafter_agent, consensus_regulatory_agent
+    from app.pipeline import run_quality_pipeline
+    
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-1024"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=4,
+        retrieved_chunks=["SOP-1024 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"User Requirement Specification": "Original URS text requiring double locks."},
+        verification_checklist=[]
+    )
+    mock_review = ReviewReport(
+        approved=False,
+        validation_gaps=["Conflict: text violates SOP-1024 section 4.1"]
+    )
+    mock_turn1 = NegotiationTurn(
+        turn_number=1,
+        proposing_agent="validation_drafting_agent",
+        proposed_reconciliation="Reconciled text with manual double-signature locks.",
+        concession_justification="Adding manual signatures satisfies both validation coverage and GxP aversion."
+    )
+    mock_turn2 = NegotiationTurn(
+        turn_number=2,
+        proposing_agent="regulatory_grounding_agent",
+        proposed_reconciliation="Reconciled text with manual double-signature locks.",
+        concession_justification="Concede and accept because manual locks comply with SOP-1024."
+    )
+
+    mock_deps.job_id = "test-consensus-success-job"
+    
+    with regulatory_grounding_agent.override(model=TestModel(custom_output_args=mock_grounding)), \
+         validation_drafting_agent.override(model=TestModel(custom_output_args=mock_draft)), \
+         internal_review_agent.override(model=TestModel(custom_output_args=mock_review)), \
+         consensus_drafter_agent.override(model=TestModel(custom_output_args=mock_turn1)), \
+         consensus_regulatory_agent.override(model=TestModel(custom_output_args=mock_turn2)):
+             
+        res = await run_quality_pipeline(
+            user_input="Calibration system audit",
+            deps=mock_deps,
+            max_retries=1
+        )
+        
+    assert res.final_status == "PENDING_HUMAN_SIGNATURE"
+    assert res.validation_draft.sections["User Requirement Specification"] == "Reconciled text with manual double-signature locks."
+    assert res.review_report.approved is True
+
+
+@pytest.mark.asyncio
+async def test_consensus_negotiation_failure(mock_deps):
+    """Verify that failed multi-agent consensus flags job as PENDING_HUMAN_INTERVENTION and stores debate history."""
+    from pydantic_ai.models.test import TestModel
+    import sqlite3
+    import json
+    
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents.consensus import NegotiationTurn
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.agents.consensus import consensus_drafter_agent, consensus_regulatory_agent
+    from app.pipeline import run_quality_pipeline
+    from app.queue.tasks import DB_PATH, init_db
+    
+    init_db()
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO agent_jobs VALUES (?, ?, ?, ?, ?, ?, ?)", ("test-consensus-fail-job", "tenant-A", "PROCESSING", 50, "Running", None, None))
+        conn.commit()
+
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-1024"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=4,
+        retrieved_chunks=["SOP-1024 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"User Requirement Specification": "Original URS text requiring double locks."},
+        verification_checklist=[]
+    )
+    mock_review = ReviewReport(
+        approved=False,
+        validation_gaps=["Conflict: text violates SOP-1024 section 4.1"]
+    )
+    mock_turn1 = NegotiationTurn(
+        turn_number=1,
+        proposing_agent="validation_drafting_agent",
+        proposed_reconciliation="Drafting compromise suggestion.",
+        concession_justification="Operational justification."
+    )
+    mock_turn2 = NegotiationTurn(
+        turn_number=2,
+        proposing_agent="regulatory_grounding_agent",
+        proposed_reconciliation="Regulatory objection counter-proposal.",
+        concession_justification="Objection: compromise still violates SOP safety guidelines. Rejecting."
+    )
+
+    from app.auth.tenant import UserSession, GxPRole
+    mock_deps.session = UserSession(user_id="eng@tenant-a.com", tenant_id="tenant-A", role=GxPRole.CSV_ENGINEER)
+    mock_deps.job_id = "test-consensus-fail-job"
+    
+    with regulatory_grounding_agent.override(model=TestModel(custom_output_args=mock_grounding)), \
+         validation_drafting_agent.override(model=TestModel(custom_output_args=mock_draft)), \
+         internal_review_agent.override(model=TestModel(custom_output_args=mock_review)), \
+         consensus_drafter_agent.override(model=TestModel(custom_output_args=mock_turn1)), \
+         consensus_regulatory_agent.override(model=TestModel(custom_output_args=mock_turn2)):
+             
+        res = await run_quality_pipeline(
+            user_input="Calibration system audit",
+            deps=mock_deps,
+            max_retries=1
+        )
+        
+    assert res.final_status == "PENDING_HUMAN_INTERVENTION"
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status, error_details FROM agent_jobs WHERE job_id = ?", ("test-consensus-fail-job",))
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "PENDING_HUMAN_INTERVENTION"
+        
+        history = json.loads(row[1])
+        assert len(history) >= 1
+
+
 
 
 
