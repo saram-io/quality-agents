@@ -1,32 +1,51 @@
-# React + TypeScript + Vite
+# Multi-Agent CSV Validation Dashboard UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This is the front-end user interface for the Multi-Agent Computer System Validation (CSV) pipeline, built using **React, TypeScript, Vite, and Tailwind CSS**. 
 
-Currently, two official plugins are available:
+The dashboard provides real-time oversight of validation document generation, human-in-the-loop signing loops, and audit history, fully compliant with **21 CFR Part 11** and **GAMP 5** software qualification expectations.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## Key Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. **Agent Execution Control Panel**:
+   - Allows quality engineers to enter target system requirements.
+   - Monitors multi-agent orchestration logs (Grounding $\rightarrow$ Drafting $\rightarrow$ Review) in real time.
+2. **Interactive Drafting Workspace**:
+   - Split-screen workspace displaying generated document sections (such as URS, Risk Assessment, or Traceability Matrices) side-by-side with semantic grounding SOP notes and compliance logs.
+3. **21 CFR Part 11 Signature Portal**:
+   - Restricts document locking to validated email credentials.
+   - Enforces electronic signature meaning (e.g. *Validation Review Approval*) and prints a permanent signature record block.
+   - Implements a visual **"UNCONTROLLED COPY WHEN PRINTED"** watermark alert across un-signed drafts, replacing it with a **"CONTROLLED GxP RECORD"** banner once signed.
 
-## Expanding the Oxlint configuration
+---
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Getting Started
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+### Prerequisites
+- Node.js ($\ge 18.0.0$)
+- npm or pnpm
+
+### Installation
+
+Navigate to the `frontend/` directory and install dependencies:
+```bash
+npm install
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### Running the Development Server
+
+Start the development server with Hot Module Replacement (HMR) enabled:
+```bash
+npm run dev
+```
+
+The app will be served at `http://localhost:5173`.
+
+---
+
+## Design System and Stack
+- **Framework**: Vite + React + TypeScript
+- **Styling**: Tailwind CSS
+- **Components Style**: shadcn/ui-styled high-contrast grids, badges, tables, and modal drawers.
+- **Compliance Visual Boundaries**: Emphasizes drafts as unverified suggestions until human-in-the-loop signing locking events occur.

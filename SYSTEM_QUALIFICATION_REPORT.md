@@ -1,6 +1,6 @@
 # GxP Software Qualification Verification Report (IQ/OQ/PQ)
 
-> **Verification Timestamp**: `2026-07-14T15:51:37.385589+00:00`
+> **Verification Timestamp**: `2026-07-14T15:54:11.452695+00:00`
 > **Operator User ID**: `SYSTEM_VALIDATOR`
 > **Overall Qualification Verdict**: `PASS`
 
@@ -16,7 +16,7 @@
 | `OQ-002` | OQ | PII & Credential Shielding Check | Patient names, SSNs, and api keys are masked | Sanitized: Standard calibration scale spec. Patient: [MASKED_NAME], SSN: [MASKED_SSN], api_key='[MASKED_CREDENTIAL]' | ✅ PASS |
 | `OQ-003` | OQ | Error Backoff & Fallback Verification Check | Executes with retry and logging fallback | Model execution completed cleanly | ✅ PASS |
 | `PQ-001` | PQ | 10 Concurrent Validation Requests Load Check | Zero exceptions thrown during load test execution | 0 exceptions and 0 runtime errors observed | ✅ PASS |
-| `PQ-002` | PQ | Average Request Latency Performance Check | Average request execution time < 60 seconds | Average latency: 0.02 seconds (Total: 0.21s) | ✅ PASS |
+| `PQ-002` | PQ | Average Request Latency Performance Check | Average request execution time < 60 seconds | Average latency: 0.02 seconds (Total: 0.18s) | ✅ PASS |
 | `PQ-003` | PQ | Output Structured Model Compilation Check | 100% of compiled drafts conform to ValidationDraft schemas | 10/10 requests parsed into valid drafts | ✅ PASS |
 
 ## Regulatory Statement & Electronic Authorization
@@ -25,4 +25,4 @@ This report serves as electronic validation evidence that the Multi-Agent CSV Qu
 
 - **Authorized Signatory**: `SYSTEM_VALIDATOR`
 - **Signature Meaning**: Validation verification approval.
-- **Signature Timestamp**: `2026-07-14T15:51:37.385623+00:00`
+- **Signature Timestamp**: `2026-07-14T15:54:11.452728+00:00`
