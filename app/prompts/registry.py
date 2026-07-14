@@ -3,6 +3,10 @@
 import os
 import re
 from typing import Dict, Tuple
+from contextvars import ContextVar
+
+# Define task-local prompt overrides (maps agent_name -> (version, template_text))
+shadow_prompt_override: ContextVar = ContextVar("shadow_prompt_override", default=None)
 
 
 class PromptRegistry:
@@ -38,25 +42,23 @@ class PromptRegistry:
             frontmatter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", content, re.DOTALL)
             version = "1.0.0"
             template_text = content
-
             if frontmatter_match:
-                frontmatter_raw = frontmatter_match.group(1)
+                frontmatter = frontmatter_match.group(1)
                 template_text = frontmatter_match.group(2)
-
-                # Extract version metadata parameter
-                for line in frontmatter_raw.splitlines():
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        if k.strip() == "version":
-                            version = v.strip()
+                for line in frontmatter.split("\n"):
+                    if line.startswith("version:"):
+                        version = line.split(":", 1)[1].strip()
 
             self.cache[agent_name] = (version, template_text)
             return version, template_text
         except Exception as e:
-            raise IOError(f"Failed to read or parse prompt file '{agent_name}': {str(e)}") from e
+            raise IOError(f"Failed parsing markdown frontmatter for '{agent_name}': {str(e)}") from e
 
     def get_prompt_version(self, agent_name: str) -> str:
-        """Retrieves the version string registered on the prompt template."""
+        """Retrieves metadata version of a target subagent prompt template."""
+        overrides = shadow_prompt_override.get()
+        if overrides and agent_name in overrides:
+            return overrides[agent_name][0]
         version, _ = self._load_and_parse(agent_name)
         return version
 
@@ -67,11 +69,19 @@ class PromptRegistry:
             agent_name: Target subagent template name.
             variables: Dict containing variable substitution values.
         """
-        _, template_text = self._load_and_parse(agent_name)
+        overrides = shadow_prompt_override.get()
+        if overrides and agent_name in overrides:
+            _, template_text = overrides[agent_name]
+        else:
+            _, template_text = self._load_and_parse(agent_name)
         try:
             return template_text.format(**variables)
         except KeyError as e:
             raise KeyError(f"Missing required prompt template variable {str(e)} for '{agent_name}'") from e
+
+    def override_prompt(self, agent_name: str, version: str, template_text: str) -> None:
+        """Injects a runtime override into the prompt template cache."""
+        self.cache[agent_name] = (version, template_text)
 
 
 # Export global registry instance

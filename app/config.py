@@ -12,6 +12,9 @@ class QualitySystemConfig:
     API_INITIAL_DELAY_SEC: float = float(os.getenv("CSV_API_INITIAL_DELAY", "1.0"))
     API_BACKOFF_FACTOR: float = float(os.getenv("CSV_API_BACKOFF_FACTOR", "2.0"))
 
+    # 1.5. Shadow Testing Engine Feature Flag
+    SHADOW_ENABLED: bool = os.getenv("CSV_SHADOW_ENABLED", "True").lower() == "true"
+
     # 2. Model Routing Definitions
     @classmethod
     def get_primary_model(cls) -> str:

@@ -52,6 +52,14 @@ async def run_agent_with_retry_and_fallback(
     primary_model = QualitySystemConfig.get_primary_model()
     fallback_model = QualitySystemConfig.get_fallback_model()
 
+    try:
+        from app.ops.shadow import shadow_model_override
+        if s_model := shadow_model_override.get():
+            primary_model = s_model
+            fallback_model = s_model
+    except ImportError:
+        pass
+
     start_time = time.perf_counter()
     last_error = None
 
@@ -62,8 +70,11 @@ async def run_agent_with_retry_and_fallback(
         if ov is not None:
             use_override = True
 
+    from app.ops.recovery import get_model_settings_for_agent
+    settings = get_model_settings_for_agent(agent.name)
+
     if use_override:
-        run_coro = agent.run(user_prompt=user_prompt, deps=deps, usage=usage)
+        run_coro = agent.run(user_prompt=user_prompt, deps=deps, usage=usage, model_settings=settings)
         result = await asyncio.wait_for(run_coro, timeout=timeout_sec)
         duration = time.perf_counter() - start_time
         telemetry_tracker.record_latency(agent.name, duration)
@@ -76,7 +87,7 @@ async def run_agent_with_retry_and_fallback(
         try:
             with agent.override(model=model_to_use):
                 # Wrap the execution in a timeout check
-                run_coro = agent.run(user_prompt=user_prompt, deps=deps, usage=usage)
+                run_coro = agent.run(user_prompt=user_prompt, deps=deps, usage=usage, model_settings=settings)
                 result = await asyncio.wait_for(run_coro, timeout=timeout_sec)
 
                 # Record latency in telemetry tracker
@@ -110,7 +121,7 @@ async def run_agent_with_retry_and_fallback(
                 try:
                     with agent.override(model=model_to_use):
                         result = await asyncio.wait_for(
-                            agent.run(user_prompt=user_prompt, deps=deps, usage=usage),
+                            agent.run(user_prompt=user_prompt, deps=deps, usage=usage, model_settings=settings),
                             timeout=timeout_sec
                         )
                         duration = time.perf_counter() - start_time
@@ -150,6 +161,15 @@ async def run_quality_pipeline(
             "Pipeline:CRITICAL_ALERT",
             f"Guardrail blocked execution. Reason: {str(e)}. User: {deps.current_user}"
         )
+        if deps.event_broker:
+            from app.events.broker import QualityEvent, QualityEventType
+            event = QualityEvent(
+                event_type=QualityEventType.GUARDRAIL_TRIPPED,
+                tenant_id=deps.session.tenant_id if deps.session else "system",
+                triggered_by_user=deps.current_user,
+                payload={"violation": str(e), "context": "Input validation", "document_id": deps.job_id}
+            )
+            await deps.event_broker.publish(event, deps.audit_logger)
         grounding_dummy = GroundingAnalysis(
             applicable_sops=[],
             regulatory_constraints=[],
@@ -182,6 +202,15 @@ async def run_quality_pipeline(
             "Pipeline:CRITICAL_ALERT",
             f"Guardrail blocked execution. Reason: {str(e)}. User: {deps.current_user}"
         )
+        if deps.event_broker:
+            from app.events.broker import QualityEvent, QualityEventType
+            event = QualityEvent(
+                event_type=QualityEventType.GUARDRAIL_TRIPPED,
+                tenant_id=deps.session.tenant_id if deps.session else "system",
+                triggered_by_user=deps.current_user,
+                payload={"violation": str(e), "context": "Output validation", "document_id": deps.job_id}
+            )
+            await deps.event_broker.publish(event, deps.audit_logger)
         grounding_dummy = GroundingAnalysis(
             applicable_sops=[],
             regulatory_constraints=[],

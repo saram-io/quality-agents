@@ -709,6 +709,233 @@ async def test_api_and_worker_queue(mock_deps):
     assert audit_ok.json()["logs_verified"] is True
 
 
+@pytest.mark.asyncio
+async def test_event_broker_coordination(mock_deps):
+    """Verify Event Broker enqueues auto-revision runs and blocks sign-off on guardrail trips."""
+    import asyncio
+    from fastapi.testclient import TestClient
+    from api import app, event_broker
+    from app.events.broker import QualityEvent, QualityEventType
+    from app.queue.tasks import block_validation_document, is_document_blocked
+    
+    client = TestClient(app)
+    
+    headers_a = {
+        "X-User-ID": "engineer@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "CSV_ENGINEER"
+    }
+    
+    headers_approver = {
+        "X-User-ID": "qa@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "QUALITY_APPROVER"
+    }
+
+    # 1. Test modifying requirement and triggering auto-update loop
+    from app.queue.tasks import save_validation_document
+    fake_doc_id = "fake-doc-123"
+    save_validation_document(fake_doc_id, "tenant-A", "URS", {"Scope": "Old scope"}, [])
+    
+    modify_payload = {
+        "document_id": fake_doc_id,
+        "new_requirement": "Modified automated transaction logging system specs.",
+        "target_system": "Batch calibration tracker"
+    }
+    
+    response = client.post("/api/v1/validation/modify", json=modify_payload, headers=headers_a)
+    assert response.status_code == 200
+    assert response.json()["status"] == "SUCCESS"
+
+    # 2. Test Guardrail Trip triggers document blocking
+    trip_event = QualityEvent(
+        event_type=QualityEventType.GUARDRAIL_TRIPPED,
+        tenant_id="tenant-A",
+        triggered_by_user="engineer@tenant-a.com",
+        payload={"document_id": fake_doc_id, "violation": "PII detected"}
+    )
+    await event_broker.publish(trip_event)
+    
+    await asyncio.sleep(0.1)
+    
+    assert is_document_blocked(fake_doc_id, "tenant-A") is True
+    
+    # 3. Verify sign-off is blocked
+    sign_payload = {"meaning": "Approving modified specs"}
+    sign_resp = client.post(f"/api/v1/validation/{fake_doc_id}/review", json=sign_payload, headers=headers_approver)
+    assert sign_resp.status_code == 403
+    assert "Signoff Blocked" in sign_resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_rollback_and_hotfix(mock_deps):
+    """Verify that system rollbacks revert parameters and failed hot-fixes auto-revert prompts."""
+    from fastapi.testclient import TestClient
+    from api import app
+    from app.ops.recovery import GxPSystemRecoveryManager, ValidatedStateSnapshot, HOT_FIX_STATUS
+    from app.prompts.registry import prompt_registry
+    import sqlite3
+    
+    client = TestClient(app)
+    
+    headers_approver = {
+        "X-User-ID": "qa@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "QUALITY_APPROVER"
+    }
+
+    # 1. Test GET /api/v1/admin/recovery/snapshots
+    snap_resp = client.get("/api/v1/admin/recovery/snapshots", headers=headers_approver)
+    assert snap_resp.status_code == 200
+    snapshots = snap_resp.json()
+    assert len(snapshots) >= 1
+    assert snapshots[0]["snapshot_id"] == "default-qualified-snapshot-uuid"
+
+    # 2. Test POST /api/v1/admin/recovery/rollback
+    rollback_payload = {
+        "snapshot_id": "default-qualified-snapshot-uuid",
+        "justification": "Reverting system prompts to last qualified state after testing new prompt regression."
+    }
+    rb_resp = client.post("/api/v1/admin/recovery/rollback", json=rollback_payload, headers=headers_approver)
+    assert rb_resp.status_code == 200
+    assert rb_resp.json()["status"] == "SUCCESS"
+
+    # 3. Test apply_emergency_hot_fix failure auto-reversion
+    original_version = prompt_registry.get_prompt_version("validation_drafting")
+    _, original_template = prompt_registry._load_and_parse("validation_drafting")
+    
+    bad_prompt_text = "This is a broken prompt that fails our strict GxP result check because it has no instructions about dual-auth or categories."
+    
+    with pytest.raises(ValueError, match="qualification tests failed"):
+        await GxPSystemRecoveryManager.apply_emergency_hot_fix(
+            target_agent="validation_drafting",
+            target_prompt_text=bad_prompt_text,
+            operator_id="admin@tenant-a.com",
+            justification="Emergency change control hot-fix test",
+            audit_logger=mock_deps.audit_logger
+        )
+
+    assert prompt_registry.get_prompt_version("validation_drafting") == original_version
+    _, restored_template = prompt_registry._load_and_parse("validation_drafting")
+    assert restored_template == original_template
+    assert HOT_FIX_STATUS["validation_drafting"] == "HOT_FIX_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_veeva_integration_connector(mock_deps):
+    """Verify Veeva Vault connector metadata binding, upload check-in, and robust error fallback."""
+    from fastapi.testclient import TestClient
+    from api import app
+    from app.integration.veeva import VeevaVaultConnector
+    from app.queue.tasks import save_validation_document, get_validation_document
+    from unittest.mock import patch
+    
+    # 1. Direct test of VeevaVaultConnector mock mode
+    connector = VeevaVaultConnector()
+    change_rec = await connector.fetch_source_change_record("CHG-999", "tenant-A")
+    assert change_rec["ticket_id"] == "CHG-999"
+    assert change_rec["gamp_category"] == 5
+
+    remote_id = await connector.upload_approved_document(
+        b"mock payload bytes",
+        {"doc_id": "test-doc-1", "gamp_category": 5, "audit_hash": "abc-signature"},
+        "tenant-A"
+    )
+    assert remote_id.startswith("DOC-")
+    await connector.close()
+
+    # 2. Integration Review Sign-off API test (Veeva mock success)
+    client = TestClient(app)
+    headers_approver = {
+        "X-User-ID": "qa@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "QUALITY_APPROVER"
+    }
+
+    doc_id = "veeva-integration-doc"
+    save_validation_document(doc_id, "tenant-A", "URS", {"Scope": "Calibration"}, [])
+
+    sign_payload = {"meaning": "Approving batch validation deliverables"}
+    response = client.post(f"/api/v1/validation/{doc_id}/review", json=sign_payload, headers=headers_approver)
+    
+    assert response.status_code == 200
+    res_data = response.json()
+    assert res_data["veeva_doc_id"] is not None
+    assert res_data["veeva_doc_id"].startswith("DOC-")
+
+    # Check local DB updated with Veeva ID
+    doc_record = get_validation_document(doc_id, "tenant-A")
+    assert doc_record["veeva_doc_id"] == res_data["veeva_doc_id"]
+
+    # 3. Integration Review Sign-off API test with Veeva API upload failure (robustness fallback)
+    doc_id_fail = "veeva-fail-doc"
+    save_validation_document(doc_id_fail, "tenant-A", "URS", {"Scope": "Calibration Fail"}, [])
+
+    with patch.object(VeevaVaultConnector, "upload_approved_document", side_effect=Exception("Connection Timeout")):
+        response_fail = client.post(f"/api/v1/validation/{doc_id_fail}/review", json=sign_payload, headers=headers_approver)
+        
+        # Verify it succeeds locally (exit code 200), but does not bind veeva_doc_id
+        assert response_fail.status_code == 200
+        res_fail_data = response_fail.json()
+        assert res_fail_data["veeva_doc_id"] is None
+        
+        # Verify local DB still has signature and doc, but veeva_doc_id is None
+        doc_record_fail = get_validation_document(doc_id_fail, "tenant-A")
+        assert doc_record_fail["veeva_doc_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_shadow_deployment_engine(mock_deps):
+    """Verify that parallel shadow runner executes, saves telemetry, and returns telemetry dashboard results."""
+    from fastapi.testclient import TestClient
+    from api import app
+    from app.ops.shadow import run_shadow_validation
+    from app.schemas import ValidationDraft
+    from app.config import QualitySystemConfig
+    import sqlite3
+    from app.queue.tasks import DB_PATH
+    
+    # 1. Prepare production result mockup
+    prod_draft = ValidationDraft(
+        document_type="URS",
+        sections={"Scope": "Production system scope check.", "Details": "Standard execution pipeline details."},
+        verification_checklist=[]
+    )
+    
+    # Enable shadow testing engine
+    QualitySystemConfig.SHADOW_ENABLED = True
+    
+    # 2. Trigger run_shadow_validation manually (which acts as a background task)
+    await run_shadow_validation(
+        input_prompt="Test shadow prompt URS drafting.",
+        production_result=prod_draft,
+        deps=mock_deps
+    )
+    
+    # Verify report is populated in SQLite table
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT comparison_id, semantic_similarity, structural_match FROM shadow_comparison_reports")
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[1] >= 0.0  # Semantic similarity is calculated
+        
+    # 3. Request admin dashboard API
+    client = TestClient(app)
+    headers_approver = {
+        "X-User-ID": "qa@tenant-a.com",
+        "X-Tenant-ID": "tenant-A",
+        "X-User-Role": "QUALITY_APPROVER"
+    }
+    
+    dash_resp = client.get("/api/v1/admin/shadow/results", headers=headers_approver)
+    assert dash_resp.status_code == 200
+    dash_data = dash_resp.json()
+    assert dash_data["total_runs"] >= 1
+    assert dash_data["status"] == "ACTIVE"
+    assert dash_data["structural_alignment_rate"] is not None
+
+
 
 
 

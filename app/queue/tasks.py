@@ -26,7 +26,7 @@ class AgentJobState(BaseModel):
     error_details: Optional[str] = None
 
 
-DB_PATH = "gxp_tenants.db"
+DB_PATH = "gxp_enterprise.db"
 
 
 def init_db() -> None:
@@ -52,7 +52,8 @@ def init_db() -> None:
                 tenant_id TEXT NOT NULL,
                 document_type TEXT NOT NULL,
                 sections TEXT NOT NULL,
-                verification_checklist TEXT NOT NULL
+                verification_checklist TEXT NOT NULL,
+                veeva_doc_id TEXT
             )
         """)
         cursor.execute("""
@@ -205,7 +206,7 @@ def get_validation_document(doc_id: str, tenant_id: str) -> Optional[dict]:
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT doc_id, tenant_id, document_type, sections, verification_checklist "
+            "SELECT doc_id, tenant_id, document_type, sections, verification_checklist, veeva_doc_id "
             "FROM compiled_documents WHERE doc_id = ? AND tenant_id = ?",
             (doc_id, tenant_id)
         )
@@ -216,7 +217,8 @@ def get_validation_document(doc_id: str, tenant_id: str) -> Optional[dict]:
                 "tenant_id": row[1],
                 "document_type": row[2],
                 "sections": json.loads(row[3]),
-                "verification_checklist": json.loads(row[4])
+                "verification_checklist": json.loads(row[4]),
+                "veeva_doc_id": row[5]
             }
     return None
 
@@ -247,3 +249,20 @@ def is_document_blocked(doc_id: str, tenant_id: str) -> bool:
             (doc_id, tenant_id)
         )
         return cursor.fetchone() is not None
+
+
+def update_validation_document_veeva_id(doc_id: str, tenant_id: str, veeva_doc_id: str) -> None:
+    """Updates the document record with the external Veeva Vault Document ID.
+
+    Args:
+        doc_id: Local document ID.
+        tenant_id: Active tenant identifier.
+        veeva_doc_id: External Veeva document identifier.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE compiled_documents SET veeva_doc_id = ? WHERE doc_id = ? AND tenant_id = ?",
+            (veeva_doc_id, doc_id, tenant_id)
+        )
+        conn.commit()

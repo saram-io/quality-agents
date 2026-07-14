@@ -44,6 +44,7 @@ class SignoffResponse(BaseModel):
     role: str
     meaning: str
     signature_token: str
+    veeva_doc_id: Optional[str] = None
 
 
 # FastAPI header injection dependency
@@ -94,6 +95,13 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+from app.events.broker import QualityEventBroker, QualityEventType
+from app.events.handlers import handle_urs_modification, handle_guardrail_trip_notification
+
+event_broker = QualityEventBroker()
+event_broker.subscribe(QualityEventType.URS_MODIFIED, handle_urs_modification)
+event_broker.subscribe(QualityEventType.GUARDRAIL_TRIPPED, handle_guardrail_trip_notification)
 
 
 @app.post(
@@ -188,6 +196,45 @@ async def get_compiled_document(
     return document
 
 
+class ModifyValidationRequest(BaseModel):
+    """Payload to modify validation requirements."""
+    document_id: str = Field(..., description="Document ID to update.")
+    new_requirement: str = Field(..., description="Modified URS requirement text.")
+    target_system: str = Field(..., description="Target system under edit.")
+
+
+@app.post(
+    "/api/v1/validation/modify",
+    status_code=status.HTTP_200_OK,
+    summary="Modify URS requirements and trigger auto-update events"
+)
+async def modify_validation_document(
+    payload: ModifyValidationRequest,
+    session: UserSession = Depends(require_role({GxPRole.CSV_ENGINEER}))
+):
+    """Permits requirement edits, publishing URS_MODIFIED event to re-trigger compilation."""
+    document = get_validation_document(payload.document_id, session.tenant_id)
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document ID '{payload.document_id}' not found."
+        )
+        
+    from app.events.broker import QualityEvent, QualityEventType
+    event = QualityEvent(
+        event_type=QualityEventType.URS_MODIFIED,
+        tenant_id=session.tenant_id,
+        triggered_by_user=session.user_id,
+        payload={
+            "document_id": payload.document_id,
+            "new_requirement": payload.new_requirement,
+            "target_system": payload.target_system
+        }
+    )
+    await event_broker.publish(event)
+    return {"status": "SUCCESS", "message": "URS_MODIFIED event published to Event Broker."}
+
+
 @app.post(
     "/api/v1/validation/{doc_id}/review",
     response_model=SignoffResponse,
@@ -206,9 +253,54 @@ async def signoff_document(
             detail=f"Document ID '{doc_id}' not found or belongs to another tenant."
         )
 
+    from app.queue.tasks import is_document_blocked
+    if is_document_blocked(doc_id, session.tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"RBAC Signoff Blocked: Document '{doc_id}' has been blocked due to an active safety/guardrail trip event."
+        )
+
     # Generate a cryptographically signed Part 11 receipt token
     signature_token_raw = f"{doc_id}:{session.tenant_id}:{session.user_id}:{payload.meaning}"
     signature_token = uuid.uuid5(uuid.NAMESPACE_DNS, signature_token_raw).hex
+
+    # 1. Prepare GxP package payload and upload metadata
+    import json
+    doc_bytes = json.dumps(document).encode("utf-8")
+    
+    metadata = {
+        "doc_id": doc_id,
+        "gamp_category": 5,  # Default classification
+        "audit_hash": signature_token,
+        "approved": True
+    }
+    
+    # 2. Trigger Veeva Vault check-in
+    from app.integration.veeva import VeevaVaultConnector
+    from app.queue.tasks import update_validation_document_veeva_id
+    from app.database import AuditLogger
+    
+    audit_logger = AuditLogger()
+    veeva_doc_id = None
+    
+    try:
+        connector = VeevaVaultConnector()
+        veeva_doc_id = await connector.upload_approved_document(doc_bytes, metadata, session.tenant_id)
+        await connector.close()
+        
+        # Save Veeva ID locally
+        update_validation_document_veeva_id(doc_id, session.tenant_id, veeva_doc_id)
+        
+        audit_logger.log_step(
+            "INTEGRATION",
+            f"Successfully checked in validated PDF to Veeva Vault. Document ID: {veeva_doc_id}. System Hash Chained."
+        )
+    except Exception as e:
+        # Catch external API failure, log warning, but do NOT fail local approval
+        audit_logger.log_step(
+            "INTEGRATION:ERROR",
+            f"Failed to check in signed document to Veeva Vault. Error: {str(e)}"
+        )
 
     return SignoffResponse(
         document_id=doc_id,
@@ -216,7 +308,8 @@ async def signoff_document(
         signed_by=session.user_id,
         role=session.role.value,
         meaning=payload.meaning,
-        signature_token=signature_token
+        signature_token=signature_token,
+        veeva_doc_id=veeva_doc_id
     )
 
 
@@ -240,3 +333,11 @@ async def verify_audit_trail(
             "Part 11 Electronic signature keys audited."
         ]
     }
+
+
+# Break circular imports and mount administrative control router
+from app.ops.api import router as admin_router
+app.include_router(admin_router)
+
+from app.ops.shadow import router as shadow_router
+app.include_router(shadow_router)

@@ -61,6 +61,7 @@ async def async_execute_agent_pipeline(
         )
 
         # 2. Build full deps context, including the tenant session
+        from api import event_broker
         deps = QualitySystemDeps(
             current_user=session.user_id,
             target_system=deps_payload.get("target_system", "Unspecified"),
@@ -68,7 +69,8 @@ async def async_execute_agent_pipeline(
             audit_logger=audit_logger,
             vector_store=vector_store,
             job_id=job_id,
-            session=session
+            session=session,
+            event_broker=event_broker
         )
 
         update_job_progress(job_id, 20, f"Executing isolated grounding for tenant {session.tenant_id}...")
@@ -89,10 +91,25 @@ async def async_execute_agent_pipeline(
             mark_job_failed(job_id, f"Compliance Guardrail Violation: {error_msg}")
             return
 
+        from app.config import QualitySystemConfig
+        if QualitySystemConfig.SHADOW_ENABLED:
+            from app.ops.shadow import run_shadow_validation
+            asyncio.create_task(
+                run_shadow_validation(
+                    input_prompt=prompt,
+                    production_result=result.validation_draft,
+                    deps=deps
+                )
+            )
+
         update_job_progress(job_id, 90, "Applying cryptographic envelope encryption to draft sections...")
 
         # 4. Apply Envelope Encryption to sensitive sections of the validation draft
         draft = result.validation_draft
+        warning = deps_payload.get("auto_revised_warning")
+        if warning:
+            draft.sections["Warning"] = warning
+
         encrypted_sections = {}
         for title, content in draft.sections.items():
             encrypted_content = encrypt_tenant_field(content, session.tenant_id)
