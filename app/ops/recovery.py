@@ -235,10 +235,14 @@ class GxPSystemRecoveryManager:
         qualified = False
         try:
             # We run the pytest validation suite
+            import os
+            env = dict(os.environ)
+            env["GXP_NESTED_TEST"] = "1"
             process = await asyncio.create_subprocess_exec(
                 "uv", "run", "pytest", "-k", "test_csv_team",
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             await asyncio.wait_for(process.wait(), timeout=60)
             qualified = (process.returncode == 0)

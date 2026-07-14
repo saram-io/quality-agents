@@ -1,8 +1,8 @@
 # GxP Validation Verification Run Report
 
 > [!IMPORTANT]
-> **Codebase SHA256 Checksum**: `6b0026028a8e2d828204558313d2bf9eef062b0234d30358411b188aea37a6cc`
-> **Run Timestamp**: `2026-07-14T23:39:53.792071+00:00`
+> **Codebase SHA256 Checksum**: `0edee9120aee1e7e7a3bda28aeb9db1522f915caae688f6e30ac9787a15dd68c`
+> **Run Timestamp**: `2026-07-14T23:55:40.878947+00:00`
 > **Overall Status**: `PASSED`
 
 ## Executive Quality Gates Scorecard
@@ -21,7 +21,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'Purpose', 'System Requirements'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `652` tokens
-- **Duration**: `0.363s`
+- **Duration**: `0.506s`
 
 ### Test Case ID: `CSA-TC-002`
 - **Overall Pass**: `FAIL`
@@ -29,7 +29,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'Functional Specifications', 'Risk Assessment'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `670` tokens
-- **Duration**: `0.209s`
+- **Duration**: `0.32s`
 
 ### Test Case ID: `CSA-TC-003`
 - **Overall Pass**: `FAIL`
@@ -37,7 +37,7 @@
 - **Structural Verification**: False (Missing: ['Introduction', 'System Requirements', 'Detailed Design Specification', 'Code Review Checklist'])
 - **Compliance Risk Score**: `0.0`
 - **Token expenditure**: `664` tokens
-- **Duration**: `0.199s`
+- **Duration**: `0.305s`
 
 ## System Audit Log Trail
 
@@ -68,22 +68,25 @@
 [Pipeline:DraftingComplete] Document Draft created: a
 [Pipeline:RiskScan] Compliance risk score evaluated: 0.0
 [Pipeline:ReviewComplete] Approval Status: False
-[Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
+[Pipeline:ReviewComplete] Approval Status: False
 [Pipeline:ReviewComplete] Approval Status: False
 [Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
-[Pipeline:ReviewComplete] Approval Status: False
+[Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
 [Pipeline:RevisionRequired] Review rejected. Gaps: ['a']. Remedial Actions: None. Initiating correction loop (Attempt 1/1).
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
 [Pipeline:Re-RiskScan] Revision Attempt 1 Compliance risk score: 0.0
 [Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
 [Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-002 finished. Passed: False. Time: 0.21s. Tokens: 670.
+[PerformanceProfiler:Telemetry] [PROFILER] Status: CACHE_MISS_FRESH_RUN | Latency: 0.5051s | TTFT: 0.0000s | Performance Index: 0.00% | Tokens Saved: 0
+[CSA:TestCaseComplete] Test CSA-TC-001 finished. Passed: False. Time: 0.51s. Tokens: 652.
 [Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
 [Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-003 finished. Passed: False. Time: 0.20s. Tokens: 664.
+[PerformanceProfiler:Telemetry] [PROFILER] Status: CACHE_MISS_FRESH_RUN | Latency: 0.3195s | TTFT: 0.0000s | Performance Index: 0.00% | Tokens Saved: 0
+[CSA:TestCaseComplete] Test CSA-TC-002 finished. Passed: False. Time: 0.32s. Tokens: 670.
 [Pipeline:Re-ReviewComplete] Revision Attempt 1 Approval Status: False
 [Pipeline:FinalFailure] Pre-flight automated check REJECTED after 1 retries.
-[CSA:TestCaseComplete] Test CSA-TC-001 finished. Passed: False. Time: 0.36s. Tokens: 652.
+[PerformanceProfiler:Telemetry] [PROFILER] Status: CACHE_MISS_FRESH_RUN | Latency: 0.3051s | TTFT: 0.0000s | Performance Index: 0.00% | Tokens Saved: 0
+[CSA:TestCaseComplete] Test CSA-TC-003 finished. Passed: False. Time: 0.31s. Tokens: 664.
 [CSA:SuiteComplete] CSA Suite run finished. Total: 3. Passed: 0. Failed: 3. Tokens: 1986.
 ```

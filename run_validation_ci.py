@@ -95,10 +95,15 @@ async def run_ci_gate() -> None:
     # Run the test suite
     if not is_live:
         from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+        from app.agents.self_healing import self_healing_agent
+        from app.agents.consensus import consensus_drafter_agent, consensus_regulatory_agent
         with (
             regulatory_grounding_agent.override(model=TestModel()),
             validation_drafting_agent.override(model=TestModel()),
             internal_review_agent.override(model=TestModel()),
+            self_healing_agent.override(model=TestModel()),
+            consensus_drafter_agent.override(model=TestModel()),
+            consensus_regulatory_agent.override(model=TestModel()),
         ):
             report = await run_csa_assurance_suite(DEFAULT_CSA_TEST_CASES, deps)
     else:

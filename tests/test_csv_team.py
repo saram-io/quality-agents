@@ -4,6 +4,80 @@ os.environ.setdefault("GOOGLE_API_KEY", "dummy-key-for-testing")
 os.environ.setdefault("ANTHROPIC_API_KEY", "dummy-key-for-testing")
 os.environ.setdefault("OPENAI_API_KEY", "dummy-key-for-testing")
 
+def clear_db() -> None:
+    """Drops and re-creates all SQLite tables to prevent fd leakage or state leak."""
+    import sqlite3
+    import json
+    from datetime import datetime, timezone
+    from app.queue.tasks import DB_PATH, init_db
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS agent_jobs")
+        cursor.execute("DROP TABLE IF EXISTS compiled_documents")
+        cursor.execute("DROP TABLE IF EXISTS blocked_documents")
+        cursor.execute("DROP TABLE IF EXISTS change_control_requests")
+        cursor.execute("DROP TABLE IF EXISTS dashboard_notifications")
+        cursor.execute("DROP TABLE IF EXISTS shadow_comparison_reports")
+        cursor.execute("DROP TABLE IF EXISTS validated_snapshots")
+        cursor.execute("DROP TABLE IF EXISTS change_control_logs")
+        cursor.execute("DROP TABLE IF EXISTS semantic_cache")
+        conn.commit()
+        
+    init_db()
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shadow_comparison_reports (
+                comparison_id TEXT PRIMARY KEY,
+                input_prompt_hash TEXT NOT NULL,
+                production_config TEXT NOT NULL,
+                shadow_config TEXT NOT NULL,
+                structural_match INTEGER NOT NULL,
+                semantic_similarity REAL NOT NULL,
+                token_cost_ratio REAL NOT NULL,
+                deviation_details TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS validated_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                qualified_timestamp TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                prompt_versions TEXT NOT NULL,
+                model_configurations TEXT NOT NULL,
+                qualification_report_hash TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS change_control_logs (
+                log_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                operator_id TEXT NOT NULL,
+                justification TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                snapshot_id TEXT,
+                details TEXT NOT NULL
+            )
+        """)
+        cursor.execute("SELECT COUNT(*) FROM validated_snapshots")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(
+                "INSERT INTO validated_snapshots VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "default-qualified-snapshot-uuid",
+                    datetime.now(timezone.utc).isoformat(),
+                    "eb805df688d97107e462192cbb99ace3e327deafa5fc7be537fbdb8b59414bd0",
+                    json.dumps({"validation_drafting": "1.4.2"}),
+                    json.dumps({"validation_drafting": {"temperature": 0.0, "top_p": 1.0}}),
+                    "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6"
+                )
+            )
+        conn.commit()
+
+if "GXP_NESTED_TEST" not in os.environ:
+    clear_db()
+
 import pytest
 from pydantic_ai.models.test import TestModel
 from pydantic_ai import RunContext
@@ -1055,7 +1129,7 @@ async def test_consensus_negotiation_success(mock_deps):
          consensus_regulatory_agent.override(model=TestModel(custom_output_args=mock_turn2)):
              
         res = await run_quality_pipeline(
-            user_input="Calibration system audit",
+            user_input="Run consensus negotiation success test prompt.",
             deps=mock_deps,
             max_retries=1
         )
@@ -1126,7 +1200,7 @@ async def test_consensus_negotiation_failure(mock_deps):
          consensus_regulatory_agent.override(model=TestModel(custom_output_args=mock_turn2)):
              
         res = await run_quality_pipeline(
-            user_input="Calibration system audit",
+            user_input="Run consensus negotiation failure test prompt.",
             deps=mock_deps,
             max_retries=1
         )
@@ -1142,6 +1216,329 @@ async def test_consensus_negotiation_failure(mock_deps):
         
         history = json.loads(row[1])
         assert len(history) >= 1
+
+
+@pytest.mark.asyncio
+async def test_self_healing_success(mock_deps):
+    """Verify that minor compliance defects trigger self-healing and successfully patch the draft."""
+    from unittest.mock import AsyncMock
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents.patch_schemas import SelfHealingReport, ComplianceDefect, CompliancePatch, DefectSeverity
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.agents.self_healing import self_healing_agent
+    from app.pipeline import run_quality_pipeline
+    
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-99"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=3,
+        retrieved_chunks=["SOP-99 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"User Requirement Specification": "Unpatched text without formatting headers."},
+        verification_checklist=[]
+    )
+    mock_review_fail = ReviewReport(
+        approved=False,
+        validation_gaps=["Formatting error: missing corporate header style"]
+    )
+    mock_healing = SelfHealingReport(
+        healing_attempt_id="test-healing-attempt-success",
+        defects_identified=[
+            ComplianceDefect(
+                failed_assertion="Formatting error: missing corporate header style",
+                error_context="User Requirement Specification",
+                severity=DefectSeverity.FORMATTING
+            )
+        ],
+        patches_applied=[
+            CompliancePatch(
+                original_defect_id="test-defect-uuid",
+                patched_section_name="User Requirement Specification",
+                patched_text_diff="Patched text containing GxP formatting headers.",
+                healing_justification="Adding headers resolves the style discrepancy."
+            )
+        ],
+        is_healed=True
+    )
+    mock_review_pass = ReviewReport(
+        approved=True,
+        validation_gaps=[]
+    )
+
+    class MockUsage:
+        total_tokens = 100
+        
+    class MockRunResult:
+        def __init__(self, output):
+            self.output = output
+            self.usage = MockUsage()
+
+    orig_grounding = regulatory_grounding_agent.run
+    orig_drafting = validation_drafting_agent.run
+    orig_review = internal_review_agent.run
+    orig_healing = self_healing_agent.run
+
+    try:
+        regulatory_grounding_agent.run = AsyncMock(return_value=MockRunResult(mock_grounding))
+        validation_drafting_agent.run = AsyncMock(return_value=MockRunResult(mock_draft))
+        internal_review_agent.run = AsyncMock(side_effect=[
+            MockRunResult(mock_review_fail),
+            MockRunResult(mock_review_pass)
+        ])
+        self_healing_agent.run = AsyncMock(return_value=MockRunResult(mock_healing))
+
+        mock_deps.job_id = "test-healing-success-job"
+
+        res = await run_quality_pipeline(
+            user_input="Run self healing success test prompt.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        
+        assert res.final_status == "PENDING_HUMAN_SIGNATURE"
+        assert res.validation_draft.sections["User Requirement Specification"] == "Patched text containing GxP formatting headers."
+        assert res.review_report.approved is True
+    finally:
+        regulatory_grounding_agent.run = orig_grounding
+        validation_drafting_agent.run = orig_drafting
+        internal_review_agent.run = orig_review
+        self_healing_agent.run = orig_healing
+
+
+@pytest.mark.asyncio
+async def test_self_healing_critical_violation_failure(mock_deps):
+    """Verify that critical compliance defects halt self-healing and trigger human escalation."""
+    from unittest.mock import AsyncMock
+    import sqlite3
+    import json
+    
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents.patch_schemas import SelfHealingReport, ComplianceDefect, DefectSeverity
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.agents.self_healing import self_healing_agent
+    from app.pipeline import run_quality_pipeline
+    from app.queue.tasks import DB_PATH, init_db
+    
+    init_db()
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO agent_jobs VALUES (?, ?, ?, ?, ?, ?, ?)", ("test-healing-fail-job", "tenant-A", "PROCESSING", 50, "Running", None, None))
+        conn.commit()
+
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-99"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=3,
+        retrieved_chunks=["SOP-99 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"User Requirement Specification": "Original URS text."},
+        verification_checklist=[]
+    )
+    mock_review_fail = ReviewReport(
+        approved=False,
+        validation_gaps=["Critical database safety-bypass detected in configuration"]
+    )
+    mock_healing = SelfHealingReport(
+        healing_attempt_id="test-healing-attempt-fail",
+        defects_identified=[
+            ComplianceDefect(
+                failed_assertion="Critical database safety-bypass detected in configuration",
+                error_context="User Requirement Specification",
+                severity=DefectSeverity.CRITICAL_VIOLATION
+            )
+        ],
+        patches_applied=[],
+        is_healed=False
+    )
+
+    class MockUsage:
+        total_tokens = 100
+        
+    class MockRunResult:
+        def __init__(self, output):
+            self.output = output
+            self.usage = MockUsage()
+
+    from app.auth.tenant import UserSession, GxPRole
+    mock_deps.session = UserSession(user_id="eng@tenant-a.com", tenant_id="tenant-A", role=GxPRole.CSV_ENGINEER)
+    mock_deps.job_id = "test-healing-fail-job"
+
+    orig_grounding = regulatory_grounding_agent.run
+    orig_drafting = validation_drafting_agent.run
+    orig_review = internal_review_agent.run
+    orig_healing = self_healing_agent.run
+
+    try:
+        regulatory_grounding_agent.run = AsyncMock(return_value=MockRunResult(mock_grounding))
+        validation_drafting_agent.run = AsyncMock(return_value=MockRunResult(mock_draft))
+        internal_review_agent.run = AsyncMock(return_value=MockRunResult(mock_review_fail))
+        self_healing_agent.run = AsyncMock(return_value=MockRunResult(mock_healing))
+
+        res = await run_quality_pipeline(
+            user_input="Run self healing critical violation failure test prompt.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        
+        assert res.final_status == "PENDING_HUMAN_INTERVENTION"
+        
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, error_details FROM agent_jobs WHERE job_id = ?", ("test-healing-fail-job",))
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] == "PENDING_HUMAN_INTERVENTION"
+            
+            history = json.loads(row[1])
+            assert len(history) >= 1
+            assert history[0]["severity"] == "CRITICAL_VIOLATION"
+    finally:
+        regulatory_grounding_agent.run = orig_grounding
+        validation_drafting_agent.run = orig_drafting
+        internal_review_agent.run = orig_review
+        self_healing_agent.run = orig_healing
+
+
+@pytest.mark.asyncio
+async def test_semantic_caching_hit_and_miss(mock_deps):
+    """Verify that semantic cache successfully caches drafts and hits on identical queries."""
+    from unittest.mock import AsyncMock
+    import sqlite3
+    
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.pipeline import run_quality_pipeline
+    from app.queue.tasks import DB_PATH
+    
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-99"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=3,
+        retrieved_chunks=["SOP-99 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"Scope": "Original drafted cache test scope."},
+        verification_checklist=[]
+    )
+    mock_review = ReviewReport(approved=True, validation_gaps=[])
+
+    class MockUsage:
+        total_tokens = 100
+        
+    class MockRunResult:
+        def __init__(self, output):
+            self.output = output
+            self.usage = MockUsage()
+
+    orig_grounding = regulatory_grounding_agent.run
+    orig_drafting = validation_drafting_agent.run
+    orig_review = internal_review_agent.run
+
+    try:
+        regulatory_grounding_agent.run = AsyncMock(return_value=MockRunResult(mock_grounding))
+        validation_drafting_agent.run = AsyncMock(return_value=MockRunResult(mock_draft))
+        internal_review_agent.run = AsyncMock(return_value=MockRunResult(mock_review))
+
+        res1 = await run_quality_pipeline(
+            user_input="Run semantic caching cache miss test.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        assert res1.final_status == "PENDING_HUMAN_SIGNATURE"
+        
+        res2 = await run_quality_pipeline(
+            user_input="Run semantic caching cache miss test.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        assert res2.final_status == "PENDING_HUMAN_SIGNATURE"
+        assert res2.validation_draft.sections["Scope"] == "Original drafted cache test scope."
+        
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM semantic_cache")
+            assert cursor.fetchone()[0] >= 1
+    finally:
+        regulatory_grounding_agent.run = orig_grounding
+        validation_drafting_agent.run = orig_drafting
+        internal_review_agent.run = orig_review
+
+
+@pytest.mark.asyncio
+async def test_semantic_caching_invalidation(mock_deps):
+    """Verify that cached entries are invalidated when reference SOP content is modified."""
+    from unittest.mock import AsyncMock
+    import sqlite3
+    
+    from app.schemas import GroundingAnalysis, ValidationDraft, ReviewReport
+    from app.agents import regulatory_grounding_agent, validation_drafting_agent, internal_review_agent
+    from app.pipeline import run_quality_pipeline
+    from app.queue.tasks import DB_PATH
+    
+    mock_grounding = GroundingAnalysis(
+        applicable_sops=["SOP-99"],
+        regulatory_constraints=["Part 11"],
+        gamp_category=3,
+        retrieved_chunks=["SOP-99 content"],
+        confidence_scores=[0.95]
+    )
+    mock_draft = ValidationDraft(
+        document_type="URS",
+        sections={"Scope": "SOP cache invalidation test scope."},
+        verification_checklist=[]
+    )
+    mock_review = ReviewReport(approved=True, validation_gaps=[])
+
+    class MockUsage:
+        total_tokens = 100
+        
+    class MockRunResult:
+        def __init__(self, output):
+            self.output = output
+            self.usage = MockUsage()
+
+    orig_grounding = regulatory_grounding_agent.run
+    orig_drafting = validation_drafting_agent.run
+    orig_review = internal_review_agent.run
+
+    try:
+        regulatory_grounding_agent.run = AsyncMock(return_value=MockRunResult(mock_grounding))
+        validation_drafting_agent.run = AsyncMock(return_value=MockRunResult(mock_draft))
+        internal_review_agent.run = AsyncMock(return_value=MockRunResult(mock_review))
+
+        res1 = await run_quality_pipeline(
+            user_input="Run semantic caching invalidation test.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        assert res1.final_status == "PENDING_HUMAN_SIGNATURE"
+        
+        mock_deps.sop_db._sops["SOP-99"] = "SOP-99: Updated guidance requiring new multi-factor authentication steps."
+        
+        res2 = await run_quality_pipeline(
+            user_input="Run semantic caching invalidation test.",
+            deps=mock_deps,
+            max_retries=1
+        )
+        assert res2.final_status == "PENDING_HUMAN_SIGNATURE"
+        
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM semantic_cache")
+            assert cursor.fetchone()[0] >= 1
+    finally:
+        regulatory_grounding_agent.run = orig_grounding
+        validation_drafting_agent.run = orig_drafting
+        internal_review_agent.run = orig_review
 
 
 
