@@ -31,7 +31,8 @@ class QualitySystemConfig:
             return "openai:gpt-4o"
         if "GOOGLE_API_KEY" in os.environ:
             return "google:gemini-2.0-flash"
-        return "google:gemini-2.0-flash"
+        # Fallback to test model if no keys present
+        return "test"
 
     @classmethod
     def get_fallback_model(cls) -> str:
@@ -45,4 +46,5 @@ class QualitySystemConfig:
             return "openai:gpt-4o-mini"
         if "ANTHROPIC_API_KEY" in os.environ:
             return "anthropic:claude-3-haiku-20240307"
-        return "google:gemini-2.0-flash"
+        # Fallback to test model if no keys present
+        return "test"

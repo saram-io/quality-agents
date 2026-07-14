@@ -27,7 +27,8 @@ def get_default_model() -> str:
         return "openai:gpt-4o"
     if "GOOGLE_API_KEY" in os.environ:
         return "google:gemini-2.0-flash"
-    return "google:gemini-2.0-flash"
+    # Fallback to "test" mock model if no provider keys exist (useful for offline CI gates)
+    return "test"
 
 
 DEFAULT_MODEL = get_default_model()
