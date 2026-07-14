@@ -1,7 +1,7 @@
 """Pydantic validation schemas and dependency types for the CSV system."""
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
 from .database import SOPDatabase, AuditLogger
