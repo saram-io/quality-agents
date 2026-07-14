@@ -81,3 +81,29 @@ Run the CI gates to check performance benchmarks:
 ```bash
 uv run python3 run_validation_ci.py
 ```
+
+---
+
+## 5. Docker Compose Execution
+
+To build and launch the platform services inside isolated containers:
+
+### 1. Start Services
+```bash
+docker compose up --build
+```
+
+This starts:
+- **Frontend**: Serves the compiled React dashboard at `http://localhost:5173`.
+- **Backend**: Synchronizes Python dependencies and automatically triggers the GxP System Qualification Suite on startup.
+
+### 2. Inspect Qualification Suite Logs
+```bash
+docker logs -f gxp_validation_backend
+```
+
+### 3. Stop Services
+```bash
+docker compose down
+```
+
