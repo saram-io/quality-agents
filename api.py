@@ -97,11 +97,12 @@ app = FastAPI(
 )
 
 from app.events.broker import QualityEventBroker, QualityEventType
-from app.events.handlers import handle_urs_modification, handle_guardrail_trip_notification
+from app.events.handlers import handle_urs_modification, handle_guardrail_trip_notification, handle_policy_drift_detected
 
 event_broker = QualityEventBroker()
 event_broker.subscribe(QualityEventType.URS_MODIFIED, handle_urs_modification)
 event_broker.subscribe(QualityEventType.GUARDRAIL_TRIPPED, handle_guardrail_trip_notification)
+event_broker.subscribe(QualityEventType.POLICY_DRIFT_DETECTED, handle_policy_drift_detected)
 
 
 @app.post(

@@ -5,11 +5,9 @@ from typing import List
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
-from .schemas import QualitySystemDeps, GroundingAnalysis, ValidationDraft, ReviewReport
-from .document_processor import ValidationDocumentParser
+from app.schemas import QualitySystemDeps, GroundingAnalysis, ValidationDraft, ReviewReport
+from app.document_processor import ValidationDocumentParser
 
-
-# Ingest Agent is defined below after model configuration.
 
 # =====================================================================
 # Model Selection Configuration

@@ -70,3 +70,45 @@ async def handle_guardrail_trip_notification(event: QualityEvent) -> None:
         f"QA_WEBHOOK_ALERT: [HIGH_PRIORITY] Document {doc_id} under tenant {event.tenant_id} "
         f"has been blocked from signature sign-offs. Reason: {violation_details}"
     )
+
+
+async def handle_policy_drift_detected(event: QualityEvent) -> None:
+    """Triggered upon policy drift detection.
+
+    Persists change control tickets and pushes revision recommendations to dashboard alerts.
+    """
+    payload = event.payload
+    assessment_id = payload.get("assessment_id", str(uuid.uuid4()))
+    source = payload.get("new_regulatory_source", "Unknown Regulatory Source")
+    severity = payload.get("severity", "LOW")
+    gaps = payload.get("identified_gaps", [])
+
+    # Format remediation actions from all gaps
+    remediations = []
+    for gap in gaps:
+        remediations.append(
+            f"- Req: {gap.get('requirement_id')}. SOP: {gap.get('impacted_internal_sop_id')}. "
+            f"Remediation: {gap.get('remediation_suggestion')}"
+        )
+    remediation_text = "\n".join(remediations) if remediations else "No gaps identified requiring immediate remediation."
+
+    # Persist change control ticket
+    from app.queue.tasks import create_change_control_request, create_dashboard_notification
+    create_change_control_request(
+        request_id=assessment_id,
+        tenant_id=event.tenant_id,
+        source=source,
+        severity=severity,
+        remediation_steps=remediation_text
+    )
+
+    # Persist dashboard notification alert
+    create_dashboard_notification(
+        notification_id=str(uuid.uuid4()),
+        tenant_id=event.tenant_id,
+        message=f"SOP Revision Recommended: Policy drift identified against new regulation source: {source}."
+    )
+    logger.info(
+        f"EVENT_BUS_HANDLER: handle_policy_drift_detected created Change Control {assessment_id} "
+        f"under tenant {event.tenant_id}."
+    )

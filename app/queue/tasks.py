@@ -63,6 +63,26 @@ def init_db() -> None:
                 blocked_reason TEXT NOT NULL
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS change_control_requests (
+                request_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                source TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                remediation_steps TEXT NOT NULL,
+                status TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dashboard_notifications (
+                notification_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                message TEXT NOT NULL,
+                read_status INTEGER NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -264,5 +284,67 @@ def update_validation_document_veeva_id(doc_id: str, tenant_id: str, veeva_doc_i
         cursor.execute(
             "UPDATE compiled_documents SET veeva_doc_id = ? WHERE doc_id = ? AND tenant_id = ?",
             (veeva_doc_id, doc_id, tenant_id)
+        )
+        conn.commit()
+
+
+def create_change_control_request(
+    request_id: str,
+    tenant_id: str,
+    source: str,
+    severity: str,
+    remediation_steps: str
+) -> None:
+    """Inserts a new draft Change Control Request ticket into database.
+
+    Args:
+        request_id: Unique record reference ID.
+        tenant_id: Scope separation identifier.
+        source: The updated regulatory source.
+        severity: Risk classification level.
+        remediation_steps: Remediation guidance text.
+    """
+    from datetime import datetime, timezone
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO change_control_requests VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                tenant_id,
+                datetime.now(timezone.utc).isoformat(),
+                source,
+                severity,
+                remediation_steps,
+                "DRAFT"
+            )
+        )
+        conn.commit()
+
+
+def create_dashboard_notification(
+    notification_id: str,
+    tenant_id: str,
+    message: str
+) -> None:
+    """Generates a compliance revision alert panel notification.
+
+    Args:
+        notification_id: Unique notification ID.
+        tenant_id: Scope separation identifier.
+        message: Alert notification text.
+    """
+    from datetime import datetime, timezone
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO dashboard_notifications VALUES (?, ?, ?, ?, ?)",
+            (
+                notification_id,
+                tenant_id,
+                datetime.now(timezone.utc).isoformat(),
+                message,
+                0  # 0 = Unread
+            )
         )
         conn.commit()

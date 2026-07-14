@@ -936,6 +936,76 @@ async def test_shadow_deployment_engine(mock_deps):
     assert dash_data["structural_alignment_rate"] is not None
 
 
+@pytest.mark.asyncio
+async def test_policy_drift_regulatory_scanning(mock_deps):
+    """Verify that the policy drift agent executes and triggers Change Control tickets on detection."""
+    from pydantic_ai.models.test import TestModel
+    from datetime import datetime, timezone
+    import sqlite3
+    
+    from app.agents.gap_analyzer_schemas import PolicyDriftAssessment, PolicyGapItem, DriftSeverity
+    from app.agents.compliance_crawler import policy_drift_agent, evaluate_new_regulatory_document
+    from app.auth.tenant import UserSession, GxPRole
+    from api import event_broker
+    from app.queue.tasks import DB_PATH
+    
+    # 1. Prepare structured mock output
+    mock_assessment = PolicyDriftAssessment(
+        assessment_id="test-drift-assessment-uuid",
+        assessment_timestamp=datetime.now(timezone.utc),
+        new_regulatory_source="FDA 21 CFR Part 11.10 guidance update",
+        is_drift_detected=True,
+        severity_classification=DriftSeverity.HIGH_RISK,
+        identified_gaps=[
+            PolicyGapItem(
+                requirement_id="FDA-21-CFR-Part-11.10-Update",
+                new_regulation_clause="Mandate automated double-signature locks for high-speed audits.",
+                impacted_internal_sop_id="SOP-CSV-001",
+                gap_description="Our active SOP only requires single signatures.",
+                remediation_suggestion="Upgrade signature section to mandate dual-authorization locks."
+            )
+        ]
+    )
+
+    # 2. Build tenant scoped deps
+    mock_deps.session = UserSession(user_id="auditor@tenant-a.com", tenant_id="tenant-A", role=GxPRole.AUDITOR)
+    mock_deps.event_broker = event_broker
+
+    # 3. Execute with agent override
+    with policy_drift_agent.override(model=TestModel(custom_output_args=mock_assessment)):
+        assessment = await evaluate_new_regulatory_document(
+            source_name="FDA-2026-Guidance",
+            new_text="New regulatory requirements content...",
+            deps=mock_deps
+        )
+        
+    assert assessment.is_drift_detected is True
+    assert assessment.assessment_id == "test-drift-assessment-uuid"
+
+    import asyncio
+    await asyncio.sleep(0.1)
+
+    # 4. Verify that sqlite table records were saved scoped to tenant ID
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        
+        # Verify Change Control
+        cursor.execute("SELECT request_id, tenant_id, source, severity, status FROM change_control_requests WHERE request_id = ?", ("test-drift-assessment-uuid",))
+        cc_row = cursor.fetchone()
+        assert cc_row is not None
+        assert cc_row[1] == "tenant-A"
+        assert cc_row[2] == "FDA 21 CFR Part 11.10 guidance update"
+        assert cc_row[3] == "HIGH_RISK"
+        assert cc_row[4] == "DRAFT"
+        
+        # Verify Dashboard Notification
+        cursor.execute("SELECT notification_id, tenant_id, message, read_status FROM dashboard_notifications WHERE tenant_id = ?", ("tenant-A",))
+        notif_row = cursor.fetchone()
+        assert notif_row is not None
+        assert "SOP Revision Recommended" in notif_row[2]
+        assert notif_row[3] == 0
+
+
 
 
 
