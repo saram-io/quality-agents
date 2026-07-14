@@ -1,0 +1,49 @@
+name: GxP Multi-Agent CSV Validation Gate
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'run_validation_ci.py'
+      - 'tests/**'
+      - 'pyproject.toml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'run_validation_ci.py'
+      - 'tests/**'
+      - 'pyproject.toml'
+
+jobs:
+  validate-build:
+    name: Execute CSA Validation Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv Package Manager
+        uses: astral-sh/setup-uv-action@v5
+        with:
+          version: "latest"
+
+      - name: Install Project Dependencies
+        run: |
+          uv sync --frozen
+
+      - name: Run CSA Verification Gate
+        run: |
+          uv run python run_validation_ci.py
+
+      - name: Upload Validation Run Report Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: VALIDATION_RUN_REPORT
+          path: VALIDATION_RUN_REPORT.md
