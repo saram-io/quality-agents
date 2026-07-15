@@ -153,6 +153,42 @@ async def run_quality_pipeline(
     from .guardrails import QualityGuardrailManager, ComplianceViolationException
     from .schemas import GroundingAnalysis, ValidationDraft, ReviewReport
 
+    # Run Security Firewall Checks
+    try:
+        from app.security.defense import inspect_and_sanitize_prompt, SecurityViolationException
+        tenant_id = deps.session.tenant_id if deps.session else "system"
+        firewall_decision = await inspect_and_sanitize_prompt(user_input, tenant_id, deps)
+        user_input = firewall_decision.sanitized_prompt
+    except SecurityViolationException as e:
+        deps.audit_logger.log_step(
+            "Pipeline:CRITICAL_ALERT",
+            f"Security Firewall blocked execution. Reason: {str(e)}. User: {deps.current_user}"
+        )
+        grounding_dummy = GroundingAnalysis(
+            applicable_sops=[],
+            regulatory_constraints=[],
+            gamp_category=0,
+            retrieved_chunks=[],
+            confidence_scores=[]
+        )
+        draft_dummy = ValidationDraft(
+            document_type="BLOCKED",
+            sections={"Blocked": f"Security Firewall Blocked: {str(e)}"},
+            verification_checklist=[]
+        )
+        review_dummy = ReviewReport(
+            approved=False,
+            validation_gaps=[f"Security Block: {str(e)}"]
+        )
+        return PipelineResult(
+            grounding_analysis=grounding_dummy,
+            validation_draft=draft_dummy,
+            review_report=review_dummy,
+            final_status="BLOCKED_BY_GUARDRAIL",
+            retries_run=0,
+            risk_score=1.0
+        )
+
     try:
         # Run Real-Time Input Guardrail Check
         QualityGuardrailManager.validate_input_safety(user_input)

@@ -113,6 +113,18 @@ async def run_ci_gate() -> None:
     checksum = calculate_codebase_checksum()
     print(f"\nCodebase SHA256 Checksum: {checksum}")
 
+    # 3.5 Run Security Penetration Test
+    print("\nExecuting security penetration test...")
+    from app.security.red_team import run_system_penetration_test, red_team_agent
+    
+    if not is_live:
+        with red_team_agent.override(model=TestModel()):
+            pen_summary = await run_system_penetration_test(deps)
+    else:
+        pen_summary = await run_system_penetration_test(deps)
+        
+    print(f"Pen-Test Summary: {pen_summary}")
+
     # 4. Evaluate Quality Gates
     failed_gates = []
     
@@ -142,6 +154,10 @@ async def run_ci_gate() -> None:
     else:
         print("[INFO] Bypassing structural/category matching gates under mock CI environment.")
 
+    # Gate 4: Prompt Injection Firewall check
+    if pen_summary["bypass_count"] > 0:
+        failed_gates.append(f"Gate 4 Failed: {pen_summary['bypass_count']} adversarial jailbreak bypasses detected.")
+
     # Write IMMUTABLE Report Markdown file
     report_filename = "VALIDATION_RUN_REPORT.md"
     try:
@@ -161,6 +177,7 @@ async def run_ci_gate() -> None:
                 rf.write(f"| **Gate 3: GAMP & Section Match** | 100% Verification | {report.passed_cases}/{report.total_test_cases} passed | {'✅ PASS' if report.passed_cases == report.total_test_cases else '❌ FAIL'} |\n")
             else:
                 rf.write(f"| **Gate 3: GAMP & Section Match** | 100% Verification | Bypassed (Mock Run) | ⚠️ BYPASS |\n")
+            rf.write(f"| **Gate 4: Prompt Injection Defense** | 0 Adversarial Bypasses | {pen_summary['bypass_count']} bypasses | {'✅ PASS' if pen_summary['bypass_count'] == 0 else '❌ FAIL'} |\n")
 
             rf.write(f"\n## Individual Test Case Results\n\n")
             for r in report.results:
